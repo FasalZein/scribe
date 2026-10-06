@@ -35,15 +35,6 @@ fn slug(title: &str) -> String {
         slug.to_owned()
     }
 }
-fn timestamp(seconds: f64) -> String {
-    let seconds = seconds.max(0.0) as u64;
-    format!(
-        "{:02}:{:02}:{:02}",
-        seconds / 3600,
-        seconds / 60 % 60,
-        seconds % 60
-    )
-}
 pub fn directory(root: &Path, meta: &Metadata) -> Result<PathBuf> {
     fs::create_dir_all(root)?;
     let date = meta
@@ -94,12 +85,17 @@ pub fn write(
         "---\n\n# {}\n",
         meta.title.replace(['\r', '\n'], " ")
     )?;
+    write!(
+        markdown,
+        "{}",
+        crate::sources::render(&meta.sources, &meta.chapters)
+    )?;
     let mut jsonl = BufWriter::new(fs::File::create(dir.join("segments.jsonl"))?);
     for segment in segments {
         writeln!(
             markdown,
             "[{}] {}\n",
-            timestamp(segment.start),
+            crate::sources::timestamp(segment.start),
             segment.text.replace(['\r', '\n'], " ")
         )?;
         serde_json::to_writer(&mut jsonl, segment)?;

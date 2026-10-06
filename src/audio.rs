@@ -41,7 +41,7 @@ pub fn chunks(pcm: &[f32], seconds: std::num::NonZeroU32) -> Vec<Range<usize>> {
     }
     ranges
 }
-pub fn decode(path: &std::path::Path) -> anyhow::Result<(Vec<f32>, Vec<u8>)> {
+pub fn decode(path: &std::ffi::OsStr) -> anyhow::Result<(Vec<f32>, Vec<u8>)> {
     use anyhow::ensure;
     let output = crate::fetch::command_output(
         std::process::Command::new("ffmpeg")

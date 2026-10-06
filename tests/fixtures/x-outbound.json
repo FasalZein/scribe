@@ -1,0 +1,83 @@
+{
+  "posts": [
+    {
+      "url": "https://x.com/OpenAI/status/1790072174117613963",
+      "id": "1790072174117613963",
+      "text": "Say hello to GPT-4o, our new flagship model which can reason across audio, vision, and text in real time: http://openai.com/index/hello-gpt-4o/\n\nText and image input rolling out today in API and ChatGPT with voice and video in the coming weeks.",
+      "raw_text": {
+        "text": "Say hello to GPT-4o, our new flagship model which can reason across audio, vision, and text in real time: https://t.co/MYHZB79UqN\n\nText and image input rolling out today in API and ChatGPT with voice and video in the coming weeks. https://t.co/uuthKZyzYx",
+        "display_text_range": [
+          0,
+          230
+        ],
+        "facets": [
+          {
+            "type": "url",
+            "indices": [
+              106,
+              129
+            ],
+            "original": "https://t.co/MYHZB79UqN",
+            "replacement": "http://openai.com/index/hello-gpt-4o/",
+            "display": "openai.com/index/hello-gp…"
+          },
+          {
+            "type": "media",
+            "indices": [
+              231,
+              254
+            ],
+            "id": "1790068706187345920",
+            "display": "pic.x.com/uuthKZyzYx",
+            "original": "https://t.co/uuthKZyzYx",
+            "replacement": "https://x.com/OpenAI/status/1790072174117613963/video/1"
+          }
+        ]
+      },
+      "created_at": "Mon May 13 17:30:38 +0000 2024",
+      "embed_card": "player",
+      "author": {
+        "name": "OpenAI",
+        "screen_name": "OpenAI"
+      },
+      "media": {
+        "all": [
+          {
+            "type": "video",
+            "duration": 82.215,
+            "formats": [
+              {
+                "url": "https://video.twimg.com/ext_tw_video/1790068706187345920/pu/pl/uNjtaCG28u_vZTn9.m3u8?tag=14",
+                "container": "m3u8"
+              },
+              {
+                "url": "https://video.twimg.com/ext_tw_video/1790068706187345920/pu/vid/avc1/480x270/plu9kxMNVDVXbL9o.mp4?tag=14",
+                "bitrate": 256000,
+                "container": "mp4",
+                "codec": "h264"
+              },
+              {
+                "url": "https://video.twimg.com/ext_tw_video/1790068706187345920/pu/vid/avc1/640x360/6jtHLSgUbanlFAdW.mp4?tag=14",
+                "bitrate": 832000,
+                "container": "mp4",
+                "codec": "h264"
+              },
+              {
+                "url": "https://video.twimg.com/ext_tw_video/1790068706187345920/pu/vid/avc1/1280x720/DR8uam33rgydydqO.mp4?tag=14",
+                "bitrate": 2176000,
+                "container": "mp4",
+                "codec": "h264"
+              },
+              {
+                "url": "https://video.twimg.com/ext_tw_video/1790068706187345920/pu/vid/avc1/1920x1080/d-kWFueNllJF18JO.mp4?tag=14",
+                "bitrate": 10368000,
+                "container": "mp4",
+                "codec": "h264"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

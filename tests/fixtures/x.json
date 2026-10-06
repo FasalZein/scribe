@@ -1,0 +1,91 @@
+{
+  "posts": [
+    {
+      "url": "https://x.com/pidotdev/status/2107033061905104941",
+      "id": "2107033061905104941",
+      "text": "Welcome to our Monday Meditations! 🌞\n\nToday @badlogicgames and @mitsuhiko are talking why we built Pi Durable, a harness build around a small task-based workflow engine so long-running, multiplayer agents can suspend and resume anywhere. Also: why not Temporal or Effect.ts.",
+      "raw_text": {
+        "text": "Welcome to our Monday Meditations! 🌞\n\nToday @badlogicgames and @mitsuhiko are talking why we built Pi Durable, a harness build around a small task-based workflow engine so long-running, multiplayer agents can suspend and resume anywhere. Also: why not Temporal or Effect.ts. https://t.co/ut7FNEeWHt",
+        "display_text_range": [
+          0,
+          274
+        ],
+        "facets": [
+          {
+            "type": "mention",
+            "indices": [
+              44,
+              58
+            ],
+            "original": "badlogicgames",
+            "id": "189876762"
+          },
+          {
+            "type": "mention",
+            "indices": [
+              63,
+              73
+            ],
+            "original": "mitsuhiko",
+            "id": "12963432"
+          },
+          {
+            "type": "media",
+            "indices": [
+              275,
+              298
+            ],
+            "id": "2107019854444105728",
+            "display": "pic.x.com/ut7FNEeWHt",
+            "original": "https://t.co/ut7FNEeWHt",
+            "replacement": "https://x.com/pidotdev/status/2107033061905104941/video/1"
+          }
+        ]
+      },
+      "created_at": "Mon Oct 05 09:00:03 +0000 2026",
+      "embed_card": "player",
+      "media": {
+        "all": [
+          {
+            "type": "video",
+            "duration": 1646.416,
+            "formats": [
+              {
+                "url": "https://video.twimg.com/amplify_video/2107019854444105728/pl/A3z7s2YgB9bvisNu.m3u8?tag=29",
+                "container": "m3u8"
+              },
+              {
+                "url": "https://video.twimg.com/amplify_video/2107019854444105728/vid/avc1/480x270/8A4sbWV2hynP7PON.mp4?tag=29",
+                "bitrate": 256000,
+                "container": "mp4",
+                "codec": "h264"
+              },
+              {
+                "url": "https://video.twimg.com/amplify_video/2107019854444105728/vid/avc1/640x360/gvEF20iiK24MxAKR.mp4?tag=29",
+                "bitrate": 832000,
+                "container": "mp4",
+                "codec": "h264"
+              },
+              {
+                "url": "https://video.twimg.com/amplify_video/2107019854444105728/vid/avc1/1280x720/SkhN178uqPT-71li.mp4?tag=29",
+                "bitrate": 2176000,
+                "container": "mp4",
+                "codec": "h264"
+              },
+              {
+                "url": "https://video.twimg.com/amplify_video/2107019854444105728/vid/avc1/1920x1080/e3D_PEsyOuREeNzs.mp4?tag=29",
+                "bitrate": 10368000,
+                "container": "mp4",
+                "codec": "h264"
+              }
+            ]
+          }
+        ]
+      },
+      "author": {
+        "name": "Pi",
+        "screen_name": "pidotdev"
+      }
+    }
+  ]
+}

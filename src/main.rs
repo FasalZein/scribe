@@ -3,6 +3,7 @@ mod cli;
 mod engine;
 mod fetch;
 mod output;
+mod sources;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -13,7 +14,7 @@ fn process(input: &str, cli: &Cli, engine: &mut engine::Engine) -> Result<std::p
     let workspace = fetch::Workspace::new()?;
     let (meta, media) = fetch::media(input, &workspace.0)?;
     eprintln!("Decoding: {}", meta.title);
-    let (pcm, bytes) = audio::decode(&media)?;
+    let (pcm, bytes) = audio::decode(media.input())?;
     let duration = pcm.len() as f64 / audio::SAMPLE_RATE as f64;
     let dir = output::directory(&cli.out, &meta)?;
     let start = Instant::now();
@@ -22,9 +23,11 @@ fn process(input: &str, cli: &Cli, engine: &mut engine::Engine) -> Result<std::p
     eprintln!("Transcribed {:.1}s of audio in {engine_secs:.2}s", duration);
     if cli.keep_media {
         fs::write(dir.join("audio.f32le"), bytes)?;
-        if fetch::is_url(input) {
+        if fetch::is_url(input)
+            && let fetch::Media::File(media) = &media
+        {
             let name = media.file_name().context("download has no filename")?;
-            fs::copy(&media, dir.join(name))?;
+            fs::copy(media, dir.join(name))?;
         }
     }
     output::write(&dir, &meta, cli, duration, engine_secs, &segments)

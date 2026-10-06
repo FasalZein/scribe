@@ -1,12 +1,13 @@
 # scribe
 
 A small Rust CLI that turns video URLs or local media into timestamped transcripts.
-It supports YouTube, X, and other sites supported by yt-dlp. An agent can later use
+It supports YouTube, X, and other sites supported by yt-dlp. X status URLs use
+the x.pcstyle.dev API first. An agent can later use
 the transcript to write notes and skills. This CLI does not summarize the transcript.
 
 ## Install
 
-Install Rust, CMake, a C++ compiler, **yt-dlp**, and **ffmpeg**, then run:
+Install Rust, CMake, a C++ compiler, **uv** (for `uvx`) or **yt-dlp**, and **ffmpeg**, then run:
 
 ```sh
 cargo install --path .
@@ -19,10 +20,15 @@ xcode-select --install
 brew install cmake yt-dlp ffmpeg
 ```
 
-Keep yt-dlp current. Old extractors can fail with HTTP 403 errors on YouTube.
+scribe selects `uvx yt-dlp@latest` when `uvx` is on PATH. Otherwise, it uses
+plain `yt-dlp`. It logs the selected command once when a run needs yt-dlp.
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) for automatic
+latest-version selection. Keep plain yt-dlp current if you use the fallback.
+Old extractors can fail with HTTP 403 errors on YouTube.
 Some sites also require authentication or cookies. scribe inherits yt-dlp's normal
 configuration, so configure cookies there if needed. YouTube extraction may also
 need a JavaScript runtime supported by your yt-dlp version, such as Deno.
+scribe explicitly enables Deno at `~/.deno/bin/deno` when that file exists.
 
 ### Linux CPU, Vulkan, and CUDA
 
@@ -99,11 +105,14 @@ failure stops the run because all inputs depend on that model.
 
 Each input creates `<out>/<YYYYMMDD>-<title-slug>/`:
 
-- `transcript.md`: YAML frontmatter and timestamped paragraphs.
+- `transcript.md`: YAML frontmatter, title, Sources, optional Chapters, and
+  timestamped paragraphs.
 - `segments.jsonl`: `{"start":0.0,"end":60.0,"text":"..."}` rows, in seconds.
-- `meta.json`: the metadata subset used, or local file information.
+- `meta.json`: the metadata subset used, including structured `sources` and
+  `chapters` when present, or local file information.
 - With `--keep-media`: `audio.f32le` (16 kHz, mono, little-endian float32) and,
-  for URL inputs, the downloaded `media.<extension>`.
+  for yt-dlp URL inputs, the downloaded `media.<extension>`. X API streams do
+  not create a downloaded media file, even with `--keep-media`.
 
 The date comes from the upload date, or today's UTC date when absent. The title
 slug has at most 60 characters. Existing output directories cause a clear error
@@ -112,7 +121,40 @@ or colliding titles. A failed transcription can leave an incomplete output
 directory. Temporary downloads are removed on normal success or error; an abrupt
 process termination can leave a temporary directory.
 
-scribe calls yt-dlp for metadata and media, then ffmpeg to decode audio into memory.
+### X API and source references
+
+For `/<handle>/status/<id>` URLs on `x.com` or `twitter.com` (including `www.`
+and `mobile.`), scribe requests JSON from `https://x.pcstyle.dev/api/convert`.
+It selects the first video or GIF and streams its lowest-bitrate MP4 directly
+through ffmpeg. It does not separately download that video or invoke yt-dlp.
+A post without video or GIF fails with a clear error. HTTP 429 fails that input
+and reports `Retry-After`; scribe does not retry. Network errors, other HTTP
+errors, malformed JSON, and unusable video formats fall back to yt-dlp with a
+reason on stderr.
+
+Environment variables:
+
+- `X_API_BASE`: override the API origin (default `https://x.pcstyle.dev`).
+- `X_MD_API_KEY`: optional API token sent as `Authorization: Bearer <key>`.
+  scribe does not log the token. Do not put tokens in command-line arguments.
+
+X Sources include the post URL, author, date, full text as a blockquote,
+expanded outbound links, mentioned profile URLs, and quoted post URLs and text
+when supplied by the API. Links to the same post's media are omitted. Thread
+replies are not treated as quoted posts. The title uses the author and the first
+80 Unicode characters of post text. The directory date comes from `created_at`.
+
+For yt-dlp inputs, Sources include `webpage_url`, the channel or uploader URL,
+and HTTP(S) links from the description, deduplicated in order. Available chapters
+appear as a separate `## Chapters` list with `[hh:mm:ss] title` entries. Local
+Sources contain only the absolute file path. `meta.json` stores the same source
+data under `sources`, tagged with `kind` (`x`, `web`, or `local`). If the X API
+falls back to yt-dlp, source data follows the yt-dlp format.
+
+### Audio processing
+
+For other URL inputs, scribe calls yt-dlp for metadata and media. ffmpeg decodes
+audio into memory for all inputs.
 It cuts at the quietest 30 ms window within the ten seconds before each target
 boundary. A cut requires an RMS level below half the loudest window's RMS in that
 search interval; flat signals use the hard boundary. Chunks are contiguous with no
@@ -131,8 +173,11 @@ Local sources are absolute paths. `model` records the requested path or URL.
 cargo build --release
 cargo test
 cargo clippy --all-targets -- -D warnings
+cargo fmt --check
 ```
 
 Unit tests exercise silence boundaries, pure-tone hard boundaries, shorter final
-chunks, and short audio. CI builds and tests on macOS (Metal) and Ubuntu (CPU).
+chunks, short audio, X URL detection, MP4 selection, source link extraction,
+metadata, and Sources/Chapters rendering. Trimmed real API and yt-dlp JSON lives
+under `tests/fixtures/`; tests also construct small edge cases. CI builds and tests on macOS (Metal) and Ubuntu (CPU).
 The unit tests do not require a model or external media tools.
