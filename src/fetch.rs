@@ -139,10 +139,9 @@ pub fn media(input: &str) -> Result<(Metadata, Pending)> {
         }
     }
     eprintln!("Fetching metadata: {input}");
-    let output = command_output(
-        yt_dlp()?.args(["--dump-single-json", "--no-playlist", "--", input]),
-        "yt-dlp",
-    )?;
+    let output = yt_dlp(|command| {
+        command.args(["--dump-single-json", "--no-playlist", "--", input]);
+    })?;
     let raw: serde_json::Value =
         serde_json::from_slice(&output.stdout).context("invalid yt-dlp metadata")?;
     let text = |key: &str| raw[key].as_str().map(str::to_owned);
@@ -185,8 +184,8 @@ pub fn resolve(media: Pending, workspace: &Path) -> Result<Media> {
     let info_path = workspace.join("info.json");
     fs::write(&info_path, info)?;
     eprintln!("Downloading media");
-    let output_path = command_output(
-        yt_dlp()?
+    let output_path = yt_dlp(|command| {
+        command
             .args([
                 "--no-playlist",
                 "--no-progress",
@@ -199,9 +198,8 @@ pub fn resolve(media: Pending, workspace: &Path) -> Result<Media> {
             ])
             .arg(workspace.join("media.%(ext)s"))
             .arg("--load-info-json")
-            .arg(&info_path),
-        "yt-dlp",
-    )?;
+            .arg(&info_path);
+    })?;
     let path = String::from_utf8_lossy(&output_path.stdout)
         .lines()
         .rev()
@@ -352,7 +350,10 @@ fn executable_on_path(name: &str) -> bool {
         })
     })
 }
-fn yt_dlp() -> Result<Command> {
+/// Run yt-dlp with the arguments that `args` adds. Through uvx, the cached yt-dlp runs first,
+/// because `@latest` checks the package index on every call (about 0.5 s each). Only a failed
+/// call retries with `@latest`, which covers a cached yt-dlp that YouTube has broken.
+fn yt_dlp(args: impl Fn(&mut Command)) -> Result<Output> {
     static TOOL: std::sync::OnceLock<Option<bool>> = std::sync::OnceLock::new();
     let uvx = TOOL
         .get_or_init(|| {
@@ -366,27 +367,35 @@ fn yt_dlp() -> Result<Command> {
             if let Some(uvx) = selected {
                 eprintln!(
                     "Using yt-dlp command: {}",
-                    if uvx { "uvx yt-dlp@latest" } else { "yt-dlp" }
+                    if uvx { "uvx yt-dlp" } else { "yt-dlp" }
                 );
             }
             selected
         })
         .context("cannot run yt-dlp: neither uvx nor yt-dlp is on PATH; install one of them")?;
-    let mut command = Command::new(if uvx { "uvx" } else { "yt-dlp" });
-    if uvx {
-        command.arg("yt-dlp@latest");
-    }
-    command.args(["--socket-timeout", SOCKET_TIMEOUT_SECS]);
-    // Deno's standard installer does not add its bin directory to every shell's PATH.
-    if let Some(home) = dirs::home_dir() {
-        let deno = home.join(".deno/bin/deno");
-        if deno.is_file() {
-            command
-                .arg("--js-runtimes")
-                .arg(format!("deno:{}", deno.display()));
+    let run = |package: Option<&str>| {
+        let mut command = Command::new(package.map_or("yt-dlp", |_| "uvx"));
+        command.args(package);
+        command.args(["--socket-timeout", SOCKET_TIMEOUT_SECS]);
+        // Deno's standard installer does not add its bin directory to every shell's PATH.
+        if let Some(home) = dirs::home_dir() {
+            let deno = home.join(".deno/bin/deno");
+            if deno.is_file() {
+                command
+                    .arg("--js-runtimes")
+                    .arg(format!("deno:{}", deno.display()));
+            }
         }
+        args(&mut command);
+        command_output(&mut command, "yt-dlp")
+    };
+    if !uvx {
+        return run(None);
     }
-    Ok(command)
+    run(Some("yt-dlp")).or_else(|error| {
+        eprintln!("yt-dlp failed; retrying with uvx yt-dlp@latest: {error:#}");
+        run(Some("yt-dlp@latest"))
+    })
 }
 
 /// The source ID of a yt-dlp source. An X post keeps its status ID when the X API fails.
