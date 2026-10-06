@@ -45,6 +45,10 @@ install_hint() {
     apt:ffmpeg) say "sudo apt-get install -y ffmpeg" ;;
     dnf:ffmpeg) say "sudo dnf install -y ffmpeg" ;;
     pacman:ffmpeg) say "sudo pacman -S --needed ffmpeg" ;;
+    apt:curl) say "sudo apt-get install -y curl ca-certificates" ;;
+    dnf:curl) say "sudo dnf install -y curl" ;;
+    pacman:curl) say "sudo pacman -S --needed curl" ;;
+    *:curl) say "install curl" ;;
     brew:uv) say "brew install uv" ;;
     dnf:uv) say "sudo dnf install -y uv" ;;
     pacman:uv) say "sudo pacman -S --needed uv" ;;
@@ -160,11 +164,19 @@ else
   else
     say "scribe is not installed; installing"
   fi
-  install_release
+  if have curl || have wget; then
+    install_release
+  else
+    false
+  fi
   case $? in
     0) ;;
     2) install_from_source ;;
-    *) problem "scribe: the release download failed; see the output above" ;;
+    *) if have curl || have wget; then
+         problem "scribe: the release download failed; see the output above"
+       else
+         problem "curl: not found; it downloads scribe. Install: $(install_hint curl)"
+       fi ;;
   esac
   current=$(find_scribe)
   [ -n "$current" ] && current_version=$(scribe_version "$current")
