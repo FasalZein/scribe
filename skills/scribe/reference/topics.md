@@ -2,35 +2,33 @@
 
 A **topic note** merges the lessons on one subject from several sources. The main agent plans the merge and owns `topics/INDEX.md`. One helper per topic note reads the lessons and writes that note, so lesson text stays out of the main agent's context.
 
+Both topic commands exit 0 on success. Errors print `scribe: <error>` on stderr and return a nonzero exit code.
+
 ## Plan (main agent)
 
-1. Set `lib` to the absolute library root (`$SCRIBE_LIBRARY`, default `~/Knowledge/scribe`).
-2. Build the map of topic slugs to lessons files from the frontmatter `topics:` lines. Each output line is one lessons file and its full topic list:
-
-   ```bash
-   grep -H '^topics: \[' "$lib"/sources/*/lessons.md
-   ```
-
-   PowerShell:
-
-   ```powershell
-   Select-String -Path "$lib\sources\*\lessons.md" -Pattern '^topics: \[' | ForEach-Object { "$($_.Path):$($_.Line)" }
-   ```
-
-   A slug matches only a complete list element: `durable-execution` does not match `execution`. To list the files for one slug, use an exact match:
-
-   ```bash
-   grep -lE '^topics: \[(.*, )?<topic-slug>(,|\])' "$lib"/sources/*/lessons.md
-   ```
-
-   PowerShell: `Select-String -List -Path "$lib\sources\*\lessons.md" -Pattern '^topics: \[(.*, )?<topic-slug>(,|\])'`.
-3. Read `topics/INDEX.md` (create it when it is missing).
-4. **Synonyms**: when two topic slugs name the same subject, keep the one in `topics/INDEX.md` (or the clearer one) and rename the other in the frontmatter `topics:` line and the lesson `topics:` lines of each lessons file that uses it.
+1. Set `SCRIBE_LIBRARY` to the absolute library root, or use the default `~/Knowledge/scribe`.
+2. Run `scribe topics plan`. It reads format 2 lessons and existing topic note filenames without changing files.
+   - Each slug lists its lessons as `sources/<source-folder>/lessons.md#l<n>`, relative to the library root.
+   - `new note` means no topic note exists. `single-source` means only one source uses the slug, regardless of lesson count.
+   - Near-duplicates are distinct slugs where one complete slug is a prefix of the other, such as `agent-trust` and `agent-trustworthiness`.
+   - A shared word alone does not match: `agent-trust` and `agent-verification` are not flagged.
+   - These flags suggest candidates for inspection. They do not establish that two subjects are synonyms.
+   - A validation error names the lessons file. Correct it with `reference/lessons.md`, then rerun the plan.
+3. **Reuse**: choose an existing slug when it fits the lesson's subject. Inspect the flagged pairs before adding a slug.
+4. **Synonyms**: merge synonym slugs only when the user requests it. Routine runs keep the slugs unchanged.
+   On request, keep the existing slug that fits best, or the clearer slug when neither exists.
+   Update the frontmatter and lesson `topics:` lines in every affected lessons file.
+   Run `scribe lessons finalize <lessons.md>` and `scribe lessons check <lessons.md>` for each changed file.
+   Merge the affected topic notes, update their links, and retain one note for the chosen slug.
+   Rerun `scribe topics plan` after the requested merge.
 5. Decide per topic slug on the new or re-extracted lessons:
    - **A topic note exists**: merge.
-   - **No note, and two or more sources use the slug**: create `topics/<topic-slug>.md` and merge the lessons from all of those sources.
-   - **No note, and only one source uses the slug**: no note. List it under `## Single-source` in `topics/INDEX.md`.
-   - **Re-extracted source**: also merge every topic note that links to its source folder (`grep -l '<source-folder>' "$lib"/topics/*.md`), even when its new lessons no longer use that slug.
+   - **No note, and two or more sources use the slug**: create `topics/<topic-slug>.md` and merge all tagged lessons.
+   - **No note, and only one source uses the slug**: keep its lessons without creating a note.
+   - **Re-extracted source**: also merge every topic note that links to its source folder, even when its new lessons no longer use that slug.
+     Search the existing topic notes for the source folder to find those notes.
+
+The plan is complete when every affected topic note has its tagged lessons and re-extracted sources identified.
 
 ## Merge (one helper per topic note)
 
@@ -73,8 +71,8 @@ updated_at: <RFC 3339 time>
 
 ### <merged lesson stated as a sentence>
 
-- <Speaker> (<source title>) argues/explains/recommends ... [L3](../sources/<source-folder>/lessons.md#l3-...) at [hh:mm:ss](../sources/<source-folder>/parts/NN-....md)
-- <Another speaker> (<source title>) disagrees: ... [L5](...)
+- <Speaker> (<source title>) argues/explains/recommends ... [L3](../sources/<source-folder>/lessons.md#l3) at [hh:mm:ss](../sources/<source-folder>/parts/NN.md)
+- <Another speaker> (<source title>) disagrees: ... [L5](../sources/<another-source-folder>/lessons.md#l5) at [hh:mm:ss](../sources/<another-source-folder>/parts/NN.md)
 
 ## Open questions
 
@@ -82,7 +80,7 @@ updated_at: <RFC 3339 time>
 
 ## Excluded lessons
 
-- [L7](../sources/<source-folder>/lessons.md#l7-...): <reason, for example "covered in topics/idempotency.md" or "off the subject of this note">
+- [L7](../sources/<source-folder>/lessons.md#l7): <reason, for example "covered in topics/idempotency.md" or "off the subject of this note">
 ```
 
 - Group lessons that say the same thing under one heading, not by source. When sources agree, list each one under the same heading.
@@ -95,7 +93,17 @@ Done when every lesson tagged with the slug is cited in a bullet or listed under
 
 ## Update `topics/INDEX.md` (main agent)
 
-Write it from the helper replies. One line per topic note: `- [<topic-slug>](<topic-slug>.md): <one-line scope> (<N> sources)`, sorted by slug. Then the `## Single-source` list of topic slugs, each with the lessons file that uses it. Remove a slug from `## Single-source` when it gains a topic note.
+Run `scribe topics index` after all topic notes are written. It rebuilds `topics/INDEX.md` and prints its absolute path when the library root is absolute.
+
+- Topic notes appear in slug order with their first scope paragraph and the number of sources whose lessons use the slug.
+- Every topic note is listed, including notes with no currently tagged sources (`0 sources`).
+- Slugs with one source and no note appear under `## Single-source`, with links to every tagged lesson.
+- Slugs with multiple sources and no note appear under `## Pending notes`. Create those notes, then rerun the command.
+- An existing topic note stays out of both lists, even when it has one source.
+- The command validates lessons and requires a title and scope paragraph in every topic note before replacing the index.
+- On validation failure, correct the named file and rerun the command. The existing index stays unchanged.
+
+Index rebuilding is complete when the command exits 0 and no pending notes remain for the affected slugs.
 
 ## Done
 

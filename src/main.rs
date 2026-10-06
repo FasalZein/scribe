@@ -7,6 +7,7 @@ mod output;
 mod parts;
 mod sources;
 mod timings;
+mod topics;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -173,10 +174,19 @@ fn transcribe(
 }
 
 fn run(cli: Cli) -> Result<bool> {
-    if let Some(cli::Command::Lessons { action }) = &cli.command {
-        match action {
-            cli::LessonsAction::Check { file } => lessons::check(file)?,
-            cli::LessonsAction::Finalize { file } => lessons::finalize(file)?,
+    if let Some(command) = &cli.command {
+        match command {
+            cli::Command::Lessons { action } => match action {
+                cli::LessonsAction::Check { file } => lessons::check(file)?,
+                cli::LessonsAction::Finalize { file } => lessons::finalize(file)?,
+            },
+            cli::Command::Topics { action } => {
+                let library = Cli::library_root()?;
+                match action {
+                    cli::TopicsAction::Plan => print!("{}", topics::plan(&library)?),
+                    cli::TopicsAction::Index => println!("{}", topics::index(&library)?.display()),
+                }
+            }
         }
         return Ok(false);
     }

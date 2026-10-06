@@ -2,12 +2,12 @@
 use anyhow::{Context, Result, bail, ensure};
 use std::{collections::BTreeSet, fs, path::Path};
 
-struct Document<'a> {
+pub(crate) struct Document<'a> {
     frontmatter: Vec<&'a str>,
-    body: &'a str,
+    pub(crate) body: &'a str,
 }
 impl<'a> Document<'a> {
-    fn parse(text: &'a str) -> Result<Self> {
+    pub(crate) fn parse(text: &'a str) -> Result<Self> {
         let mut lines = text.split_inclusive('\n');
         let first = lines.next().unwrap_or_default();
         if first.trim() != "---" {
@@ -41,7 +41,14 @@ impl<'a> Document<'a> {
     }
 }
 
+pub(crate) struct Lesson {
+    pub id: usize,
+    pub title: String,
+    pub topics: BTreeSet<String>,
+}
+
 struct Summary {
+    lessons: Vec<Lesson>,
     count: usize,
     topics: BTreeSet<String>,
 }
@@ -52,6 +59,15 @@ pub fn check(path: &Path) -> Result<()> {
     let document = Document::parse(&text)?;
     let summary = validate_body(document.body, path)?;
     validate_frontmatter(&document, &summary)
+}
+
+pub(crate) fn read(path: &Path) -> Result<Vec<Lesson>> {
+    let text =
+        fs::read_to_string(path).with_context(|| format!("cannot read {}", path.display()))?;
+    let document = Document::parse(&text)?;
+    let summary = validate_body(document.body, path)?;
+    validate_frontmatter(&document, &summary)?;
+    Ok(summary.lessons)
 }
 
 fn validate_frontmatter(document: &Document<'_>, summary: &Summary) -> Result<()> {
@@ -83,6 +99,7 @@ fn validate_frontmatter(document: &Document<'_>, summary: &Summary) -> Result<()
 
 fn validate_body(body: &str, path: &Path) -> Result<Summary> {
     let mut summary = Summary {
+        lessons: Vec::new(),
         count: 0,
         topics: BTreeSet::new(),
     };
@@ -164,9 +181,8 @@ fn validate_lesson(lines: &[&str], path: &Path, summary: &mut Summary) -> Result
     field("- who:")?;
     let at = field("- at:")?;
     validate_citation(at, path).with_context(|| format!("{id}: at link"))?;
-    summary
-        .topics
-        .extend(parse_topics(field("- topics:")?, id)?);
+    let topics = parse_topics(field("- topics:")?, id)?;
+    summary.topics.extend(topics.iter().cloned());
     if kind == "procedure" {
         let mut steps = 0;
         for line in lines {
@@ -183,6 +199,11 @@ fn validate_lesson(lines: &[&str], path: &Path, summary: &mut Summary) -> Result
         ensure!(steps > 0, "{id}: procedure requires numbered steps");
     }
     summary.count += 1;
+    summary.lessons.push(Lesson {
+        id: summary.count,
+        title: lines[1].to_owned(),
+        topics,
+    });
     Ok(())
 }
 

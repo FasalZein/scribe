@@ -51,11 +51,24 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Plan topic notes or rebuild their index (no model needed)
+    Topics {
+        #[command(subcommand)]
+        action: TopicsAction,
+    },
     /// Validate or finalize a format 2 lessons file (no model needed)
     Lessons {
         #[command(subcommand)]
         action: LessonsAction,
     },
+}
+
+#[derive(Subcommand)]
+pub enum TopicsAction {
+    /// List topic slugs, lessons, note status and near-duplicates
+    Plan,
+    /// Rebuild topics/INDEX.md from topic notes and lessons
+    Index,
 }
 
 #[derive(Subcommand)]
@@ -91,6 +104,10 @@ impl Cli {
         if let Some(root) = &self.out {
             return Ok(root.clone());
         }
+        Ok(Self::library_root()?.join("sources"))
+    }
+
+    pub fn library_root() -> anyhow::Result<PathBuf> {
         let library = match std::env::var_os("SCRIBE_LIBRARY") {
             Some(root) => PathBuf::from(root),
             None => dirs::home_dir()
@@ -99,6 +116,6 @@ impl Cli {
                 })?
                 .join("Knowledge/scribe"),
         };
-        Ok(library.join("sources"))
+        Ok(library)
     }
 }
