@@ -20,7 +20,7 @@ allowed-tools:
 The library root is `$SCRIBE_LIBRARY`, default `~/Knowledge/scribe`. Resolve it once to an absolute path and use that path in every command and helper brief. Each source has one folder, named `<date>-<title>-<id>` (`<source-folder>` below):
 
 ```
-sources/<source-folder>/index.md      metadata, Sources, Chapters, Parts table (read this)
+sources/<source-folder>/index.md      metadata, Sources, Chapters, Parts table, Known terms, Low-confidence passages (read this)
 sources/<source-folder>/parts/NN*.md  transcript slices, cut at chapters, at most about 2,500 words each (helpers read these)
 sources/<source-folder>/transcript.md full transcript (for grep)
 sources/<source-folder>/lessons.md    written by extraction
