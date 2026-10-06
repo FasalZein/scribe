@@ -1,6 +1,6 @@
 # scribe
 
-scribe turns a video URL (X, YouTube, or any site yt-dlp supports) or a local media file into a timestamped transcript in a Markdown library. It runs the Parakeet speech model locally, so no transcription service or API key is needed. The repository also ships an agent skill in [`skills/scribe/`](skills/scribe/): the agent runs scribe, splits the reading across helpers that write lessons, and merges the lessons into topic notes.
+scribe turns a video URL (X, YouTube, or any site yt-dlp supports) or a local media file into a timestamped transcript in a Markdown library. It runs the Parakeet Ultra speech model locally, so no transcription service or API key is needed. The repository also ships an agent skill in [`skills/scribe/`](skills/scribe/): the agent runs scribe, splits the reading across helpers that write lessons, and merges the lessons into topic notes.
 
 ## Quick start
 
@@ -26,7 +26,7 @@ The installer:
 
 It exits 0 when everything is ready. Run it again at any time; it changes nothing when scribe is current.
 
-The first transcription downloads the speech model (740 MB) into the platform cache directory, under `scribe/models/` (`~/Library/Caches/scribe/models/` on macOS, `~/.cache/scribe/models/` on Linux).
+The first transcription downloads the speech model, Parakeet Ultra Q8_0 (740 MB), into the platform cache directory, under `scribe/models/` (`~/Library/Caches/scribe/models/` on macOS, `~/.cache/scribe/models/` on Linux).
 
 ### Optional companion: browse-x
 
@@ -158,12 +158,13 @@ A local build tunes ggml for the build machine's CPU. The release binaries and `
 | The first run on a Mac spends 15-20 s in model load | macOS rebuilds its Metal shader cache (`$(getconf DARWIN_USER_CACHE_DIR)com.apple.metal`). Later loads take about 0.2 s. `--timings` shows the `model` stage. |
 | `ffprobe` not found, or a warning that the duration is unknown | Install ffmpeg with ffprobe. scribe reads local file durations with ffprobe to detect truncated files. |
 | `scribe: command not found` after install | Add the install directory to PATH: `export PATH="$HOME/.local/bin:$PATH"`. The installer prints this hint. |
+| You want the previous model, Parakeet TDT 0.6B v3 | Pass `-m https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf/resolve/90f082450fcbacdb54e5900c44ef697c9ea59622/parakeet-tdt-0.6b-v3-Q8_0.gguf` ([ADR 0008](docs/adr/0008-parakeet-ultra-single-default.md)). |
 | X post fails with HTTP 429 | The X API rate-limits requests. Wait for the reported `Retry-After`; scribe does not retry. |
 
 ## Design decisions
 
-The decisions and their measurements are in [`docs/adr/`](docs/adr/): the agent extracts while the binary transcribes (0001), transcribe-cpp over sherpa-onnx (0002), 30-second chunks (0003), source IDs (0004), and overlapping stages within a source (0005).
+The decisions and their measurements are in [`docs/adr/`](docs/adr/): the agent extracts while the binary transcribes (0001), transcribe-cpp over sherpa-onnx (0002), 30-second chunks (0003), source IDs (0004), overlapping stages within a source (0005), one decoder thread on a GPU backend (0006), and Parakeet Ultra as the default model (0008, which supersedes 0007).
 
 ## License
 
-The code is MIT ([`LICENSE`](LICENSE)). The default model, [Parakeet TDT 0.6B v3 Q8_0 GGUF](https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf), is licensed under CC-BY-4.0, separately from the code. scribe pins it to a Hugging Face commit and verifies its size and SHA-256 after download.
+The code is MIT ([`LICENSE`](LICENSE)). The default model, [Parakeet Ultra Q8_0 GGUF](https://huggingface.co/handy-computer/parakeet-ultra-gguf), is [Moondream](https://huggingface.co/moondream/parakeet-ultra)'s post-trained [NVIDIA Parakeet TDT 0.6B v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3). It is licensed under CC-BY-4.0, separately from the code. scribe pins it to a Hugging Face commit and verifies its size and SHA-256 after download.

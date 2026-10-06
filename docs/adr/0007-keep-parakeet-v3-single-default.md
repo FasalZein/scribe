@@ -1,5 +1,7 @@
 # Keep Parakeet TDT v3 as the single default model
 
+Status: superseded by [ADR 0008](0008-parakeet-ultra-single-default.md). The user waived the 0.3-point bar and made Ultra the default.
+
 scribe ships one default model and no model names or aliases; `-m <path|url>` is the escape hatch for any other GGUF. We tested whether Parakeet Ultra (handy-computer/parakeet-ultra-gguf, Moondream's post-train of v3) should replace v3 as that one default.
 
 The rule: switch only if Ultra's aggregate WER is at least 0.3 points lower than v3's, no talk is more than 0.5 points worse, and the end-to-end time stays within 20% of v3.
