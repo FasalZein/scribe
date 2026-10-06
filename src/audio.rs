@@ -76,6 +76,16 @@ impl Chunker {
         }
         ranges
     }
+    /// Forget samples already consumed by the engine. The caller removes the same prefix
+    /// from its PCM and shifts any released ranges. Unreleased chunks stay here.
+    pub fn discard(&mut self, samples: usize) {
+        self.next -= samples;
+        for (range, _) in &mut self.held {
+            range.start -= samples;
+            range.end -= samples;
+        }
+    }
+
     /// The remaining chunks once `pcm` holds the whole audio, and the count of hard cuts over
     /// all chunks.
     pub fn finish(mut self, pcm: &[f32]) -> (Vec<Range<usize>>, usize) {
@@ -761,6 +771,47 @@ mod tests {
         );
         std::fs::remove_dir_all(dir).unwrap();
     }
+    #[test]
+    fn consumed_audio_can_be_discarded_without_changing_cuts() {
+        for pcm in [
+            bursts(200 * SAMPLE_RATE + 123, 91),
+            vec![0.5; 180 * SAMPLE_RATE + 7],
+        ] {
+            let seconds = 30.try_into().unwrap();
+            let expected = reference_chunks(&pcm, seconds);
+            let expected_hard_cuts = expected[..expected.len() - 1]
+                .iter()
+                .filter(|range| range.len() == 30 * SAMPLE_RATE)
+                .count();
+            let mut chunker = Chunker::new(seconds);
+            let mut retained = Vec::new();
+            let mut offset = 0;
+            let mut actual = Vec::new();
+            for block in pcm.chunks(16_384) {
+                retained.extend_from_slice(block);
+                let ready = chunker.ready(&retained);
+                actual.extend(ready.iter().map(|r| r.start + offset..r.end + offset));
+                if let Some(last) = ready.last() {
+                    let consumed = last.end;
+                    retained.drain(..consumed);
+                    chunker.discard(consumed);
+                    offset += consumed;
+                }
+                assert!(
+                    retained.len() < 32 * SAMPLE_RATE,
+                    "consumed PCM stayed in memory"
+                );
+            }
+            let (tail, hard_cuts) = chunker.finish(&retained);
+            actual.extend(tail.into_iter().map(|r| r.start + offset..r.end + offset));
+            assert_eq!(actual, expected);
+            assert_eq!(hard_cuts, expected_hard_cuts);
+            assert_eq!(offset + retained.len(), pcm.len());
+            assert!(check_complete(offset + retained.len(), Some(180.0)).is_ok());
+            assert!(check_complete(retained.len(), Some(180.0)).is_err());
+        }
+    }
+
     #[test]
     fn short_audio_is_one_chunk() {
         assert_eq!(

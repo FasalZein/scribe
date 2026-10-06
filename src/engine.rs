@@ -158,15 +158,16 @@ impl Engine {
     ) -> Result<Transcription> {
         let mut transcription = Transcription::default();
         for batch in crate::audio::chunks(pcm, seconds).chunks(BATCH_CHUNKS) {
-            self.run(pcm, batch, &mut transcription)?;
+            self.run(pcm, batch, 0, &mut transcription)?;
         }
         Ok(transcription)
     }
-    /// Transcribe the `ranges` of `pcm` as one batch and append their words.
+    /// Transcribe the retained PCM ranges and append words at their absolute source times.
     pub fn run(
         &mut self,
         pcm: &[f32],
         ranges: &[Range<usize>],
+        sample_offset: usize,
         transcription: &mut Transcription,
     ) -> Result<()> {
         let inputs: Vec<&[f32]> = ranges.iter().map(|range| &pcm[range.clone()]).collect();
@@ -183,7 +184,8 @@ impl Engine {
             let result = result.with_context(|| {
                 format!("transcription failed for chunk {}", transcription.chunks)
             })?;
-            transcription.add(range, result);
+            let absolute_range = sample_offset + range.start..sample_offset + range.end;
+            transcription.add(&absolute_range, result);
         }
         Ok(())
     }
