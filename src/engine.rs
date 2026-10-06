@@ -19,6 +19,15 @@ pub struct Segment {
     pub text: String,
 }
 
+/// Engine stage times summed over all chunks. transcribe-cpp spreads the shared batch encode
+/// over its utterances, so the sums equal the real batch times.
+#[derive(Default)]
+pub struct EngineTimings {
+    pub mel: f64,
+    pub encode: f64,
+    pub decode: f64,
+}
+
 pub struct Engine {
     session: Session,
     options: RunOptions,
@@ -54,7 +63,7 @@ impl Engine {
         &mut self,
         pcm: &[f32],
         seconds: std::num::NonZeroU32,
-    ) -> Result<Vec<Segment>> {
+    ) -> Result<(Vec<Segment>, EngineTimings)> {
         let ranges = chunks(pcm, seconds);
         eprintln!("Transcribing {} chunks", ranges.len());
         let mut results = Vec::with_capacity(ranges.len());
@@ -71,9 +80,13 @@ impl Engine {
             results.extend(batch_results);
         }
         let mut segments = Vec::new();
+        let mut timings = EngineTimings::default();
         for (index, (range, result)) in ranges.iter().zip(results).enumerate() {
             let result =
                 result.with_context(|| format!("transcription failed for chunk {}", index + 1))?;
+            timings.mel += f64::from(result.timings.mel_ms) / 1000.0;
+            timings.encode += f64::from(result.timings.encode_ms) / 1000.0;
+            timings.decode += f64::from(result.timings.decode_ms) / 1000.0;
             let offset = range.start as f64 / SAMPLE_RATE as f64;
             if result.timestamp_kind != TimestampKind::None && !result.segments.is_empty() {
                 segments.extend(result.segments.into_iter().map(|s| Segment {
@@ -89,7 +102,7 @@ impl Engine {
                 });
             }
         }
-        Ok(segments)
+        Ok((segments, timings))
     }
 }
 
@@ -118,6 +131,7 @@ mod tests {
         let text = engine
             .transcribe(pcm, cli.chunk_secs)
             .unwrap()
+            .0
             .into_iter()
             .map(|segment| segment.text)
             .collect::<Vec<_>>()

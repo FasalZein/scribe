@@ -36,6 +36,9 @@ pub struct Cli {
     /// Compute backend (explicit selections do not fall back)
     #[arg(long, value_enum, default_value = "auto", value_name = "NAME")]
     pub backend: Backend,
+    /// Print per-stage wall times on stderr
+    #[arg(long)]
+    pub timings: bool,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
