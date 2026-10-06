@@ -3,6 +3,7 @@ mod cli;
 mod engine;
 mod fetch;
 mod lessons;
+mod logging;
 mod output;
 mod parts;
 mod sources;
@@ -62,7 +63,7 @@ fn process(
         &meta,
         cli,
         duration,
-        engine_secs,
+        timings,
         &transcription.words,
         transcription.hard_cuts,
     )?;
@@ -208,7 +209,9 @@ fn run(cli: Cli) -> Result<bool> {
     Ok(failed)
 }
 fn main() -> std::process::ExitCode {
-    match run(Cli::parse()) {
+    let cli = Cli::parse();
+    logging::init(cli.verbose);
+    match run(cli) {
         Ok(false) => std::process::ExitCode::SUCCESS,
         Ok(true) => std::process::ExitCode::FAILURE,
         Err(error) => {

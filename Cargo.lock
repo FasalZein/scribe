@@ -626,6 +626,7 @@ dependencies = [
  "anyhow",
  "clap",
  "dirs",
+ "log",
  "serde",
  "serde_json",
  "sha2",

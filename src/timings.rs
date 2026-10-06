@@ -1,4 +1,4 @@
-//! Per-stage wall times for `--timings`, printed as one line on stderr.
+//! Per-stage wall times for publication and the optional `--timings` stderr line.
 use std::time::Instant;
 
 pub struct Timings {
@@ -31,6 +31,9 @@ impl Timings {
         self.add(stage, start.elapsed().as_secs_f64());
         value
     }
+    pub fn elapsed(&self) -> f64 {
+        self.start.elapsed().as_secs_f64()
+    }
     pub fn report(&self) {
         if !self.enabled {
             return;
@@ -43,7 +46,7 @@ impl Timings {
         eprintln!(
             "timings: {}; total {:.2}s",
             stages.join(", "),
-            self.start.elapsed().as_secs_f64()
+            self.elapsed()
         );
     }
 }

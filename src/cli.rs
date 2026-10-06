@@ -44,6 +44,9 @@ pub struct Cli {
     // also sets the encoder threads. See docs/adr/0006-decoder-threads.md.
     #[arg(long, default_value = "0", value_name = "N")]
     pub threads: u16,
+    /// Print engine and GPU diagnostic logs on stderr
+    #[arg(long)]
+    pub verbose: bool,
     /// Print per-stage wall times on stderr
     #[arg(long)]
     pub timings: bool,
