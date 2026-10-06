@@ -121,6 +121,32 @@ pub fn description_links(text: &str) -> Vec<String> {
     }
     links
 }
+// Facets identify accounts, but only a complete @handle token in displayed post text
+// may create a mention link. X handles use at most 15 ASCII letters, digits or underscores.
+fn has_mention(text: &str, handle: &str) -> bool {
+    if handle.is_empty()
+        || handle.len() > 15
+        || !handle
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'_')
+    {
+        return false;
+    }
+    text.match_indices('@').any(|(at, _)| {
+        if text[..at]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_alphanumeric() || matches!(c, '_' | '@' | '/'))
+        {
+            return false;
+        }
+        let token: String = text[at + 1..]
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        token.eq_ignore_ascii_case(handle)
+    })
+}
 pub fn x_links(post: &Value) -> (Vec<String>, Vec<String>) {
     let mut links = Vec::new();
     let mut mentions = Vec::new();
@@ -140,10 +166,10 @@ pub fn x_links(post: &Value) -> (Vec<String>, Vec<String>) {
             match facet["type"].as_str() {
                 Some("mention") => {
                     if let Some(handle) = facet["original"].as_str() {
-                        push_unique(
-                            &mut mentions,
-                            &format!("https://x.com/{}", handle.trim_start_matches('@')),
-                        );
+                        let handle = handle.strip_prefix('@').unwrap_or(handle);
+                        if has_mention(post["text"].as_str().unwrap_or(""), handle) {
+                            push_unique(&mut mentions, &format!("https://x.com/{handle}"));
+                        }
                     }
                 }
                 Some("url") => {
@@ -299,6 +325,42 @@ mod tests {
         assert_eq!(
             mentions,
             ["https://x.com/badlogicgames", "https://x.com/mitsuhiko"]
+        );
+    }
+    #[test]
+    fn grok_bot_galaxy_is_a_real_mention() {
+        let raw: Value =
+            serde_json::from_str(include_str!("../tests/fixtures/x-poteto.json")).unwrap();
+        let post = &raw["posts"][0];
+        assert!(post["text"].as_str().unwrap().contains("Grok @Bot Galaxy"));
+        assert_eq!(x_links(post).1, ["https://x.com/Bot"]);
+    }
+    #[test]
+    fn mention_facets_must_name_real_handle_tokens() {
+        for (text, handle) in [
+            ("Grok Bot Galaxy", "Bot"),
+            ("email someone@Bot.com", "Bot"),
+            ("Grok @BotGalaxy", "Bot"),
+            ("Grok @Bot Galaxy", "Bot Galaxy"),
+            ("Grok @@Bot Galaxy", "Bot"),
+            ("Grok @abcdefghijklmnop", "abcdefghijklmnop"),
+            ("Grok @Boté", "Bot"),
+        ] {
+            let post = serde_json::json!({"text": text, "raw_text": {"facets": [
+                {"type": "mention", "original": handle}
+            ]}});
+            assert!(
+                x_links(&post).1.is_empty(),
+                "false mention in {text:?} for {handle:?}"
+            );
+        }
+        let post = serde_json::json!({"text": "Hello (@Bot), @bot and @real_123!", "raw_text": {"facets": [
+            {"type": "mention", "original": "@bot"},
+            {"type": "mention", "original": "real_123"}
+        ]}});
+        assert_eq!(
+            x_links(&post).1,
+            ["https://x.com/bot", "https://x.com/real_123"]
         );
     }
     #[test]

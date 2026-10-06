@@ -73,13 +73,16 @@ pub fn directory(root: &Path, meta: &Metadata) -> Result<PathBuf> {
         .map(str::to_owned)
         .unwrap_or_else(today);
     let name = format!("{date}-{}", slug(&meta.title));
-    // A folder written before source IDs has no suffix and no stored ID. Reuse it for the same
-    // source string, so its lessons.md stays with the transcript.
-    let legacy = root.join(&name);
-    if legacy.join("index.md").is_file()
-        && stored(&legacy).is_some_and(|m| m["id"].is_null() && m["source"] == meta.source.as_str())
-    {
-        return Ok(std::path::absolute(legacy)?);
+    // Legacy folders have no ID or suffix. Match the source string independently of the
+    // current title: a new X title cut must not orphan the earlier transcript and lessons.
+    for entry in fs::read_dir(root)? {
+        let legacy = entry?.path();
+        if legacy.join("index.md").is_file()
+            && stored(&legacy)
+                .is_some_and(|m| m["id"].is_null() && m["source"] == meta.source.as_str())
+        {
+            return Ok(std::path::absolute(legacy)?);
+        }
     }
     let dir = root.join(format!("{name}{suffix}"));
     if let Some(other) = stored(&dir).filter(|m| m["id"] != meta.id.as_str()) {
@@ -392,6 +395,11 @@ mod tests {
         .unwrap();
         assert_eq!(
             directory(&root, &m).unwrap(),
+            std::path::absolute(&legacy).unwrap()
+        );
+        let renamed = meta("youtube:a", "Whole word title", Some("20261006"));
+        assert_eq!(
+            directory(&root, &renamed).unwrap(),
             std::path::absolute(&legacy).unwrap()
         );
         let other = meta("youtube:b", "Video", Some("20260101"));

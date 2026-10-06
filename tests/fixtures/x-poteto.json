@@ -1,0 +1,43 @@
+{
+  "posts": [
+    {
+      "url": "https://x.com/poteto/status/2102050467505430555",
+      "id": "2102050467505430555",
+      "text": "here's how i shipped 2,500 PRs last month to production\n\nthis was originally supposed to be for Cursor Compile in London. i couldn't make it since i was livestreaming for Grok @Bot Galaxy so i'm making it available for free here on X! watch it on 2x speed, i talk slowly",
+      "raw_text": {
+        "text": "here's how i shipped 2,500 PRs last month to production\n\nthis was originally supposed to be for Cursor Compile in London. i couldn't make it since i was livestreaming for Grok @Bot Galaxy so i'm making it available for free here on X! watch it on 2x speed, i talk slowly https://t.co/NgrGz7tmPM",
+        "display_text_range": [
+          0,
+          270
+        ],
+        "facets": [
+          {
+            "type": "mention",
+            "indices": [
+              176,
+              180
+            ],
+            "original": "Bot",
+            "id": "2085838061347217408"
+          },
+          {
+            "type": "media",
+            "indices": [
+              271,
+              294
+            ],
+            "id": "2101938030122868736",
+            "display": "pic.x.com/NgrGz7tmPM",
+            "original": "https://t.co/NgrGz7tmPM",
+            "replacement": "https://x.com/poteto/status/2102050467505430555/video/1"
+          }
+        ]
+      },
+      "created_at": "Mon Sep 21 15:01:00 +0000 2026",
+      "author": {
+        "name": "lauren",
+        "screen_name": "poteto"
+      }
+    }
+  ]
+}

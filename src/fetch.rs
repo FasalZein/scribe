@@ -586,16 +586,7 @@ fn x_metadata(post: &serde_json::Value, raw: &serde_json::Value) -> Result<Metad
             "x:{}",
             crate::sources::x_status_id(url).context("X post URL has no status ID")?
         ),
-        title: format!(
-            "{author} (@{handle}): {}",
-            // Post text often has blank lines; titles land in YAML and headings, so keep one line.
-            text.split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ")
-                .chars()
-                .take(80)
-                .collect::<String>()
-        ),
+        title: format!("{author} (@{handle}): {}", x_title_text(text)),
         source: url.to_owned(),
         uploader: Some(handle.to_owned()),
         upload_date: Some(x_date(date)?),
@@ -618,6 +609,31 @@ fn x_metadata(post: &serde_json::Value, raw: &serde_json::Value) -> Result<Metad
         },
         chapters: Vec::new(),
     })
+}
+// The limit applies to post text, not the author prefix. Keep an oversized first word intact
+// rather than producing an empty title or splitting a word.
+const X_TITLE_CHARS: usize = 80;
+fn x_title_text(text: &str) -> String {
+    let mut title = String::new();
+    let mut chars = 0;
+    for word in text
+        .split(['\r', '\n'])
+        .next()
+        .unwrap_or("")
+        .split_whitespace()
+    {
+        let word_chars = word.chars().count();
+        if !title.is_empty() {
+            if chars + 1 + word_chars > X_TITLE_CHARS {
+                break;
+            }
+            title.push(' ');
+            chars += 1;
+        }
+        title.push_str(word);
+        chars += word_chars;
+    }
+    title
 }
 fn x_date(date: &str) -> Result<String> {
     let parts: Vec<_> = date.split_whitespace().collect();
@@ -793,6 +809,59 @@ mod tests {
         assert!(x_date("Mon Feb 30 09:00:03 +0000 2026").is_err());
     }
     #[test]
+    fn x_title_ends_at_a_whole_word_and_sources_keep_full_text() {
+        let mut raw: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/x.json")).unwrap();
+        let text = "here's how i shipped 2,500 PRs last month to production this was originally supposed to be a talk";
+        raw["posts"][0]["text"] = text.into();
+        let meta = x_metadata(&raw["posts"][0], &raw).unwrap();
+        assert_eq!(
+            meta.title,
+            "Pi (@pidotdev): here's how i shipped 2,500 PRs last month to production this was originally"
+        );
+        assert!(crate::sources::render(&meta.sources, &[]).contains(&format!("> {text}\n")));
+    }
+    #[test]
+    fn x_titles_preserve_character_and_line_boundaries() {
+        let mut raw: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/x.json")).unwrap();
+        for (text, expected) in [
+            (
+                "  First\t line  \r\nSecond line".to_owned(),
+                "First line".to_owned(),
+            ),
+            (format!("{} next", "🌞".repeat(80)), "🌞".repeat(80)),
+            (format!("{} next", "a".repeat(81)), "a".repeat(81)),
+        ] {
+            raw["posts"][0]["text"] = text.clone().into();
+            let meta = x_metadata(&raw["posts"][0], &raw).unwrap();
+            assert_eq!(meta.title, format!("Pi (@pidotdev): {expected}"));
+            let Sources::X {
+                text: full_text, ..
+            } = meta.sources
+            else {
+                panic!("expected X sources")
+            };
+            assert_eq!(full_text, text);
+        }
+    }
+    #[test]
+    fn field_post_title_stops_at_first_line_without_losing_sources() {
+        let raw: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/x-poteto.json")).unwrap();
+        let meta = x_metadata(&raw["posts"][0], &raw).unwrap();
+        assert_eq!(
+            meta.title,
+            "lauren (@poteto): here's how i shipped 2,500 PRs last month to production"
+        );
+        let markdown = crate::sources::render(&meta.sources, &[]);
+        assert!(
+            markdown.contains("> this was originally supposed to be for Cursor Compile in London.")
+        );
+        assert!(markdown.contains("Grok @Bot Galaxy"));
+        assert!(markdown.contains("- <https://x.com/Bot>"));
+    }
+    #[test]
     fn quoted_posts_exclude_thread_and_reply_context() {
         let mut raw: serde_json::Value =
             serde_json::from_str(include_str!("../tests/fixtures/x.json")).unwrap();
@@ -816,7 +885,7 @@ mod tests {
         let meta = x_metadata(&raw["posts"][0], &raw).unwrap();
         assert_eq!(
             meta.title,
-            "Pi (@pidotdev): Welcome to our Monday Meditations! 🌞 Today @badlogicgames and @mitsuhiko are tal"
+            "Pi (@pidotdev): Welcome to our Monday Meditations! 🌞"
         );
     }
 }
