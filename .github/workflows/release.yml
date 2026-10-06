@@ -1,0 +1,74 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+env:
+  # Portable binaries: no -march=native from the build machine.
+  TRANSCRIBE_CMAKE_ARGS: -DGGML_NATIVE=OFF
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-14, target: aarch64-apple-darwin, optional: false }
+          # 22.04 images keep the glibc requirement low (2.35), so the binaries
+          # also run on Debian 12 and Ubuntu 22.04.
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, optional: false }
+          - { os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu, optional: false }
+          # Windows is optional: a failed build does not block the release.
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, optional: true }
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.optional }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check that the tag matches Cargo.toml
+        shell: bash
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          test "v$version" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME != Cargo.toml v$version"; exit 1; }
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: Install native build prerequisites (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake g++
+      - run: cargo build --release --locked
+      - name: Package (macOS, Linux)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          name=scribe-$VERSION-${{ matrix.target }}.tar.gz
+          mkdir dist
+          cp target/release/scribe LICENSE dist/
+          tar -czf "$name" -C dist scribe LICENSE
+          shasum -a 256 "$name" > "$name.sha256"
+          cat "$name.sha256"
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $name = "scribe-$env:VERSION-${{ matrix.target }}.zip"
+          Compress-Archive -Path target/release/scribe.exe, LICENSE -DestinationPath $name
+          $hash = (Get-FileHash $name -Algorithm SHA256).Hash.ToLower()
+          "$hash  $name" | Out-File -Encoding ascii -NoNewline "$name.sha256"
+          Get-Content "$name.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scribe-${{ matrix.target }}
+          path: scribe-*-${{ matrix.target }}.*
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: scribe-*
+          merge-multiple: true
+          path: dist
+      - run: ls -l dist
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* -R "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes

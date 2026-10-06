@@ -1,10 +1,13 @@
 name: CI
 on: [push, pull_request]
+env:
+  # Same CPU flags as the release build.
+  TRANSCRIBE_CMAKE_ARGS: -DGGML_NATIVE=OFF
 jobs:
   build-and-test:
     strategy:
       matrix:
-        os: [macos-latest, ubuntu-latest]
+        os: [macos-latest, ubuntu-latest, ubuntu-24.04-arm]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
