@@ -1,6 +1,6 @@
 # scribe
 
-Rust CLI (`src/`) plus the agent skill (`SKILL.md`, `reference/`, `scripts/install.sh`). Domain terms live in `GLOSSARY.md`; decisions live in `docs/adr/`.
+Rust CLI (`src/`) plus the agent skill in `skills/scribe/` (`SKILL.md`, `reference/`, `scripts/install.sh`), laid out like pc-style/x-md so `npx skills add FasalZein/scribe --skill scribe` copies only that folder. Domain terms live in `GLOSSARY.md`; decisions live in `docs/adr/`.
 
 - Delegated work on this repository (workers, reviewers, any helper that edits or reviews the CLI or the skill) runs on Opus: `anthropic/claude-opus-5-5`. The user asked for this.
 
@@ -12,7 +12,7 @@ Rust CLI (`src/`) plus the agent skill (`SKILL.md`, `reference/`, `scripts/insta
 | `SCRIBE_REGRESSION_MODEL=<gguf> SCRIBE_REGRESSION_MEDIA=<Pi durable-sessions talk> cargo test --release -- --ignored` | Lost-speech regression test; plain `cargo test` skips it. Run after any change to chunking or the engine. |
 | `scribe <source> --timings` | Per-stage wall times on stderr; see ADR 0005 for how to read them. |
 | `SCRIBE_TEST_MODEL=<gguf> SCRIBE_TEST_MEDIA=<mp4> scripts/linux-test.sh [arm64\|amd64]` | Linux CPU build, tests and a 3-minute end-to-end run in Docker. |
-| `git tag vX.Y.Z && git push origin vX.Y.Z` | Release: `.github/workflows/release.yml` builds and attaches the binaries. The tag must equal `version` in `Cargo.toml`, which `scripts/install.sh` also reads. |
+| `git tag vX.Y.Z && git push origin vX.Y.Z` | Release: `.github/workflows/release.yml` builds and attaches the binaries. The tag must equal `version` in `Cargo.toml` and `metadata.version` in `skills/scribe/SKILL.md`; CI fails when they differ, and the installer reads the SKILL.md value. |
 
 ## Traps
 

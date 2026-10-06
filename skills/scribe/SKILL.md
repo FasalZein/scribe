@@ -1,11 +1,17 @@
 ---
 name: scribe
 description: Transcribe videos and extract lessons into the knowledge library. Use when given an X post, YouTube or other video or podcast URL, or a local media file to learn from; when queuing many sources, a playlist or a channel; or when merging lessons into topic notes.
+metadata:
+  version: "0.1.0"
+allowed-tools:
+  - Bash(scribe *)
+  - Bash(sh scripts/install.sh)
+  - Bash(uvx yt-dlp@latest *)
 ---
 
 # scribe
 
-`scribe` turns a **source** (URL or local media file) into a **transcript** in the **library**. Helpers then do the **extraction**: they read the transcript and write its **lessons**. Lessons then merge into **topic notes**. Terms are defined in [`GLOSSARY.md`](GLOSSARY.md); use them as written.
+`scribe` turns a **source** (URL or local media file) into a **transcript** in the **library**. Helpers then do the **extraction**: they read the transcript and write its **lessons**. Lessons then merge into **topic notes**. Use these terms as written.
 
 The library root is `$SCRIBE_LIBRARY`, default `~/Knowledge/scribe`:
 
@@ -22,7 +28,7 @@ topics/INDEX.md                one line per topic
 
 ### 1. Check the tools
 
-Run `scribe --version`, `ffprobe -version` and `uvx --version` (or `yt-dlp --version`). If one fails, run `sh <this skill's directory>/scripts/install.sh` (on Windows, `powershell -ExecutionPolicy Bypass -File <this skill's directory>\scripts\install.ps1`) and follow what it prints. The script installs `scribe` and checks ffmpeg, ffprobe, and uvx or yt-dlp. It prints the install command for each missing tool; run those commands only with the user's approval.
+Run `scribe --version`, `ffprobe -version` and `uvx --version` (or `yt-dlp --version`). If one fails, run `sh <this skill's directory>/scripts/install.sh` (on Windows, `powershell -ExecutionPolicy Bypass -File <this skill's directory>\scripts\install.ps1`) and follow what it prints. The script installs `scribe` and checks ffmpeg, ffprobe, and uvx or yt-dlp. It prints the install command for each missing tool; run those commands only with the user's approval. Build prerequisites per platform are in the [README](https://github.com/FasalZein/scribe#build-from-source).
 
 Done when every version command succeeds, or the install script exits 0.
 

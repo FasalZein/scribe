@@ -1,16 +1,16 @@
 # scribe
 
-scribe turns a video URL (X, YouTube, or any site yt-dlp supports) or a local media file into a timestamped transcript in a Markdown library. It runs the Parakeet speech model locally, so no transcription service or API key is needed. The repository is also an agent skill: the agent runs scribe, splits the reading across helpers that write lessons, and merges the lessons into topic notes.
+scribe turns a video URL (X, YouTube, or any site yt-dlp supports) or a local media file into a timestamped transcript in a Markdown library. It runs the Parakeet speech model locally, so no transcription service or API key is needed. The repository also ships an agent skill in [`skills/scribe/`](skills/scribe/): the agent runs scribe, splits the reading across helpers that write lessons, and merges the lessons into topic notes.
 
 ## Quick start
 
 Install the skill for all your agents:
 
 ```sh
-npx skills add FasalZein/scribe -g
+npx skills add FasalZein/scribe -g -y --skill scribe
 ```
 
-The first time the agent uses the skill, it runs `scripts/install.sh` (`scripts/install.ps1` on Windows). You can run it yourself from the installed skill directory:
+The first time the agent uses the skill, it runs the skill's `scripts/install.sh` (`scripts/install.ps1` on Windows). You can run it yourself from the installed skill directory:
 
 ```sh
 sh ~/.agents/skills/scribe/scripts/install.sh
@@ -83,7 +83,7 @@ Environment variables:
 | Variable | Effect |
 |---|---|
 | `SCRIBE_LIBRARY` | Library root (default `~/Knowledge/scribe`) |
-| `SCRIBE_INSTALL_DIR` | Install directory for `scripts/install.sh` (default `~/.local/bin`) |
+| `SCRIBE_INSTALL_DIR` | Install directory for the skill's `scripts/install.sh` (default `~/.local/bin`) |
 | `X_API_BASE` | X API origin (default `https://x.pcstyle.dev`) |
 | `X_MD_API_KEY` | Optional X API token, sent as `Authorization: Bearer <key>` and never logged |
 
@@ -111,12 +111,12 @@ $SCRIBE_LIBRARY/
 
 ## Agent workflow
 
-[`SKILL.md`](SKILL.md) is the procedure; [`GLOSSARY.md`](GLOSSARY.md) defines the terms.
+[`skills/scribe/SKILL.md`](skills/scribe/SKILL.md) is the procedure; [`GLOSSARY.md`](GLOSSARY.md) defines the terms.
 
 1. **Index.** scribe writes the transcript; the agent reads each `index.md` only, so its own context stays free for many sources.
-2. **Helper.** One helper per source reads the parts and writes `lessons.md`, following [`reference/lessons.md`](reference/lessons.md).
+2. **Helper.** One helper per source reads the parts and writes `lessons.md`, following [`reference/lessons.md`](skills/scribe/reference/lessons.md).
 3. **Lessons.** Each lesson carries topic tags and timestamps that link back to the source.
-4. **Topic notes.** The agent merges lessons into `topics/<topic>.md`, following [`reference/topics.md`](reference/topics.md).
+4. **Topic notes.** The agent merges lessons into `topics/<topic>.md`, following [`reference/topics.md`](skills/scribe/reference/topics.md).
 
 ## Build from source
 

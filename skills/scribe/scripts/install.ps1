@@ -26,7 +26,8 @@ function FindScribe {
     return $null
 }
 
-$SkillVersion = (Select-String -Path (Join-Path $SkillDir 'Cargo.toml') -Pattern '^version = "(.*)"' |
+# The skill folder has no Cargo.toml; SKILL.md metadata carries the version (CI checks it matches).
+$SkillVersion = (Select-String -Path (Join-Path $SkillDir 'SKILL.md') -Pattern '^  version: "(.*)"' |
     Select-Object -First 1).Matches[0].Groups[1].Value
 
 # Returns 0 on success, 2 when no release asset matches, 1 on other failures.
@@ -64,8 +65,8 @@ function InstallFromSource {
     $cxx = (Have 'cl') -or (Have 'clang++')
     if ((Have 'cargo') -and (Have 'cmake') -and $cxx) {
         Write-Host 'building scribe from source with cargo (a few minutes)'
-        & cargo install --locked --path $SkillDir
-        if ($LASTEXITCODE -ne 0) { $Missing.Add("cargo install --locked --path $SkillDir failed; see the output above") }
+        & cargo install --locked --git "https://github.com/$Repo" --tag "v$SkillVersion" scribe
+        if ($LASTEXITCODE -ne 0) { $Missing.Add("cargo install --git https://github.com/$Repo --tag v$SkillVersion failed; see the output above") }
         return
     }
     $Missing.Add('scribe: no prebuilt binary and cannot build from source. Install: winget install Rustlang.Rustup Kitware.CMake Microsoft.VisualStudio.2022.BuildTools (with the C++ workload), then run this script again.')

@@ -29,7 +29,8 @@ version_ge() {
     print 1 }'
 }
 
-skill_version=$(sed -n 's/^version = "\(.*\)"/\1/p' "$skill_dir/Cargo.toml" | head -n 1)
+# The skill folder has no Cargo.toml; SKILL.md metadata carries the version (CI checks it matches).
+skill_version=$(sed -n 's/^  version: "\(.*\)"/\1/p' "$skill_dir/SKILL.md" | head -n 1)
 
 # --- package manager, for the printed install commands ----------------------
 pm=""
@@ -141,8 +142,8 @@ install_from_source() {
   cxx=""; for c in c++ g++ clang++; do have "$c" && { cxx=$c; break; }; done
   if have cargo && have cmake && [ -n "$cxx" ]; then
     say "building scribe from source with cargo (a few minutes)"
-    cargo install --locked --path "$skill_dir" && return 0
-    problem "cargo install --locked --path $skill_dir failed; see the output above"
+    cargo install --locked --git "https://github.com/$REPO" --tag "v$skill_version" scribe && return 0
+    problem "cargo install --git https://github.com/$REPO --tag v$skill_version failed; see the output above"
     return 1
   fi
   need=""

@@ -30,6 +30,8 @@ jobs:
         run: |
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
           test "v$version" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME != Cargo.toml v$version"; exit 1; }
+          skill=$(sed -n 's/^  version: "\(.*\)"/\1/p' skills/scribe/SKILL.md | head -n 1)
+          test "$skill" = "$version" || { echo "skills/scribe/SKILL.md version $skill != Cargo.toml $version"; exit 1; }
           echo "VERSION=$version" >> "$GITHUB_ENV"
       - name: Install native build prerequisites (Linux)
         if: runner.os == 'Linux'

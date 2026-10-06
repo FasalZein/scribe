@@ -30,9 +30,9 @@ updated_at: <RFC 3339 time>
 
 <2-4 sentences: what this subject is and the current state of knowledge across sources.>
 
-## Points
+## Lessons
 
-### <point stated as a sentence>
+### <merged lesson stated as a sentence>
 
 - <Speaker> (<source title>) argues/explains/recommends ... [L3](../sources/<slug>/lessons.md#l3-...) at [hh:mm:ss](../sources/<slug>/parts/NN-....md)
 - <Another speaker> (<source title>) disagrees: ... [L5](...)
@@ -44,9 +44,9 @@ updated_at: <RFC 3339 time>
 
 Rules:
 
-- Group lessons by point, not by source. When sources agree, list each one under the same point. When they conflict, keep both and name the conflict.
+- Group lessons that say the same thing under one heading, not by source. When sources agree, list each one under the same heading. When they conflict, keep both and name the conflict.
 - Keep each speaker's attribution and each `verify:` note. An opinion from one speaker stays an opinion.
-- Link every bullet to its lesson and its timestamp, so each point traces back to the source.
+- Link every bullet to its lesson and its timestamp, so each merged lesson traces back to the source.
 - Update the paragraph under the title when new lessons change the overall picture.
 
 ## Update `topics/INDEX.md`
