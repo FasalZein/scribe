@@ -1,16 +1,14 @@
-use crate::{
-    audio::{SAMPLE_RATE, chunks},
-    cli::Cli,
-};
+use crate::{audio::SAMPLE_RATE, cli::Cli};
 use anyhow::{Context, Result};
 use serde::Serialize;
+use std::ops::Range;
 use transcribe_cpp::{Model, ModelOptions, RunOptions, Session, TimestampKind};
 
 /// Chunks per engine batch. transcribe-cpp holds the features and encoder output of a whole
 /// batch, so one batch over all chunks grows memory with the source length. On the 27:26 talk
 /// (M4 Pro, Metal, busy host) peak memory was 1.28 GB at 8, 1.42 GB at 16 and 1.53 GB at 32
 /// chunks against 1.95 GB for one batch; engine time stayed within run-to-run noise.
-const BATCH_CHUNKS: usize = 16;
+pub const BATCH_CHUNKS: usize = 16;
 
 #[derive(Serialize)]
 pub struct Segment {
@@ -26,6 +24,14 @@ pub struct EngineTimings {
     pub mel: f64,
     pub encode: f64,
     pub decode: f64,
+}
+
+/// Segments and engine times, filled one batch at a time.
+#[derive(Default)]
+pub struct Transcription {
+    pub segments: Vec<Segment>,
+    pub timings: EngineTimings,
+    chunks: usize,
 }
 
 pub struct Engine {
@@ -59,35 +65,46 @@ impl Engine {
             options,
         })
     }
+    /// Transcribe whole audio. The pipeline in main.rs uses `run` on growing audio instead.
+    #[cfg(test)]
     pub fn transcribe(
         &mut self,
         pcm: &[f32],
         seconds: std::num::NonZeroU32,
-    ) -> Result<(Vec<Segment>, EngineTimings)> {
-        let ranges = chunks(pcm, seconds);
-        eprintln!("Transcribing {} chunks", ranges.len());
-        let mut results = Vec::with_capacity(ranges.len());
-        for batch in ranges.chunks(BATCH_CHUNKS) {
-            let inputs: Vec<&[f32]> = batch.iter().map(|range| &pcm[range.clone()]).collect();
-            let batch_results = self
-                .session
-                .run_batch(&inputs, &self.options)
-                .context("batch transcription failed")?;
-            anyhow::ensure!(
-                batch_results.len() == batch.len(),
-                "engine returned an incomplete batch"
-            );
-            results.extend(batch_results);
+    ) -> Result<Transcription> {
+        let mut transcription = Transcription::default();
+        for batch in crate::audio::chunks(pcm, seconds).chunks(BATCH_CHUNKS) {
+            self.run(pcm, batch, &mut transcription)?;
         }
-        let mut segments = Vec::new();
-        let mut timings = EngineTimings::default();
-        for (index, (range, result)) in ranges.iter().zip(results).enumerate() {
-            let result =
-                result.with_context(|| format!("transcription failed for chunk {}", index + 1))?;
+        Ok(transcription)
+    }
+    /// Transcribe the `ranges` of `pcm` as one batch and append their segments.
+    pub fn run(
+        &mut self,
+        pcm: &[f32],
+        ranges: &[Range<usize>],
+        transcription: &mut Transcription,
+    ) -> Result<()> {
+        let inputs: Vec<&[f32]> = ranges.iter().map(|range| &pcm[range.clone()]).collect();
+        let results = self
+            .session
+            .run_batch(&inputs, &self.options)
+            .context("batch transcription failed")?;
+        anyhow::ensure!(
+            results.len() == ranges.len(),
+            "engine returned an incomplete batch"
+        );
+        for (range, result) in ranges.iter().zip(results) {
+            transcription.chunks += 1;
+            let result = result.with_context(|| {
+                format!("transcription failed for chunk {}", transcription.chunks)
+            })?;
+            let timings = &mut transcription.timings;
             timings.mel += f64::from(result.timings.mel_ms) / 1000.0;
             timings.encode += f64::from(result.timings.encode_ms) / 1000.0;
             timings.decode += f64::from(result.timings.decode_ms) / 1000.0;
             let offset = range.start as f64 / SAMPLE_RATE as f64;
+            let segments = &mut transcription.segments;
             if result.timestamp_kind != TimestampKind::None && !result.segments.is_empty() {
                 segments.extend(result.segments.into_iter().map(|s| Segment {
                     start: offset + s.t0_ms as f64 / 1000.0,
@@ -102,7 +119,7 @@ impl Engine {
                 });
             }
         }
-        Ok((segments, timings))
+        Ok(())
     }
 }
 
@@ -131,7 +148,7 @@ mod tests {
         let text = engine
             .transcribe(pcm, cli.chunk_secs)
             .unwrap()
-            .0
+            .segments
             .into_iter()
             .map(|segment| segment.text)
             .collect::<Vec<_>>()

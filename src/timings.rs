@@ -17,6 +17,13 @@ impl Timings {
     pub fn add(&mut self, stage: &'static str, secs: f64) {
         self.stages.push((stage, secs));
     }
+    /// The first recorded time of `stage`, or zero.
+    pub fn get(&self, stage: &str) -> f64 {
+        self.stages
+            .iter()
+            .find(|(name, _)| *name == stage)
+            .map_or(0.0, |(_, secs)| *secs)
+    }
     /// Run `f` and record its wall time under `stage`.
     pub fn time<T>(&mut self, stage: &'static str, f: impl FnOnce() -> T) -> T {
         let start = Instant::now();
