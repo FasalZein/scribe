@@ -79,6 +79,7 @@ scribe [OPTIONS] <INPUT>...
     --chunk-secs N     Positive target chunk length in seconds (default 30)
     --keep-media       Keep downloaded media and decoded audio
     --backend NAME     auto|cpu|metal|vulkan|cuda (default auto)
+    --timings          Print per-stage wall times on stderr
 -h, --help
 -V, --version
 ```
@@ -221,8 +222,9 @@ falls back to yt-dlp, source data follows the yt-dlp format.
 
 ### Audio processing
 
-For other URL inputs, scribe calls yt-dlp for metadata and media. ffmpeg decodes
-audio into memory for all inputs.
+For other URL inputs, scribe calls yt-dlp once for metadata and downloads the
+media from that saved JSON (`--load-info-json`), so the extractor runs once per
+source. ffmpeg decodes audio into memory for all inputs.
 It cuts at the quietest 30 ms window within the ten seconds before each target
 boundary. A cut requires an RMS level below half the loudest window's RMS in that
 search interval; flat signals use the hard boundary. Chunks are contiguous with no
@@ -237,8 +239,44 @@ chunk, because the engine rejects tiny chunks.
 The default target is 30 s because transcribe-cpp's Parakeet drops whole sentences
 from chunks near 60 s (see `docs/adr/0003-30-second-chunks.md`).
 
-`engine_secs` measures chunk selection and transcription, not model loading,
-downloading, decoding, or output writing. `duration_secs` measures decoded audio.
+### Performance
+
+The stages of one source overlap (see `docs/adr/0005-overlap-stages-within-a-source.md`):
+
+- The model loads on its own thread while the media downloads and decodes. A
+  skipped input never loads the model.
+- ffmpeg streams samples to the main thread while it decodes. An engine batch
+  starts as soon as 16 chunks are final, so most of the decode time hides behind
+  transcription. The chunk cuts are the same as on the whole audio.
+- The truncation check runs on the whole decoded audio, before the last batches
+  and before any output.
+
+`--timings` prints one line per input on stderr, for example:
+
+```text
+timings: metadata 0.20s, model 0.22s, download 0.00s, decode 5.23s, engine 12.47s, after-decode 0.14s, mel 0.04s, encode 9.15s, tdt-decode 3.01s, write 0.02s; total 16.83s
+```
+
+`model`, `download` and `decode` run in parallel with each other and with
+`engine`, so the stages do not add up to `total`. `engine` is the time inside
+engine batches; `after-decode` is the wall time from the end of decoding to the
+last batch, which is the transcription that did not overlap. `mel`, `encode` and
+`tdt-decode` are transcribe-cpp's own stage sums. Median wall time of three or four runs
+on an M4 Pro (Metal, load average 5-12):
+
+| source | before | after |
+|---|---:|---:|
+| local 27:26 mp4 | 14.36 s | 13.67 s |
+| X post, 27:26 video | 24.55 s | 16.83 s |
+| YouTube, 39:49 talk | 33.38 s | 27.31 s |
+| YouTube, 3:27 talk | 9.29 s | 6.54 s |
+
+One cold model load took 17 s instead of 0.2 s, while macOS rebuilt its Metal
+shader cache (`$(getconf DARWIN_USER_CACHE_DIR)com.apple.metal`). The overlap
+hides a cold load only as far as the download and decode last.
+
+`engine_secs` is the time inside engine batches, not model loading,
+downloading, decoding, chunk selection, or output writing. `duration_secs` measures decoded audio.
 Local sources are absolute paths. `model` records the requested path or URL.
 
 ## Development
