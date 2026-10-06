@@ -50,14 +50,108 @@ fn stored(dir: &Path) -> Option<serde_json::Value> {
     serde_json::from_slice(&fs::read(dir.join("meta.json")).ok()?).ok()
 }
 
+/// Serialize recovery and publication, so recovery cannot remove another run's active stage.
+fn publication_lock(root: &Path) -> Result<fs::File> {
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(root.join(".scribe-publication.lock"))?;
+    lock.lock()?;
+    Ok(lock)
+}
+
+fn directory_name(meta: &Metadata) -> String {
+    let date = meta
+        .upload_date
+        .as_deref()
+        .filter(|d| d.len() == 8 && d.bytes().all(|b| b.is_ascii_digit()))
+        .map(str::to_owned)
+        .unwrap_or_else(today);
+    format!("{date}-{}{}", slug(&meta.title), id_suffix(&meta.id))
+}
+
+fn same_source(dir: &Path, meta: &Metadata) -> bool {
+    stored(dir).is_some_and(|m| {
+        m["id"] == meta.id.as_str() || (m["id"].is_null() && m["source"] == meta.source.as_str())
+    })
+}
+
+/// Recover this source before lookup creates a folder or the caller checks its index.
+/// Old backups without a target record use the current source's normal folder name.
+fn recover(root: &Path, meta: &Metadata) -> Result<()> {
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let backup = entry.path();
+        if !entry.file_type()?.is_dir()
+            || !entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".scribe-backup-")
+            || !same_source(&backup, meta)
+        {
+            continue;
+        }
+        let record = backup.with_extension("target");
+        let name = if record.exists() {
+            serde_json::from_slice::<String>(&fs::read(&record)?)?
+        } else {
+            directory_name(meta)
+        };
+        let mut components = Path::new(&name).components();
+        anyhow::ensure!(
+            matches!(components.next(), Some(std::path::Component::Normal(_)))
+                && components.next().is_none()
+                && !name.starts_with(".scribe-"),
+            "invalid recovery target in {}",
+            record.display()
+        );
+        let target = root.join(name);
+        if target.exists() {
+            // A kill after the second rename leaves both a complete new publication and a backup.
+            anyhow::ensure!(
+                target.join("index.md").is_file() && same_source(&target, meta),
+                "cannot restore {} over {}; backup retained",
+                backup.display(),
+                target.display()
+            );
+            fs::remove_dir_all(&backup)?;
+        } else {
+            fs::rename(&backup, &target)?;
+        }
+        if record.exists() {
+            fs::remove_file(record)?;
+        }
+    }
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with(".scribe-stage-") && entry.file_type()?.is_dir() {
+            fs::remove_dir_all(entry.path())?;
+        } else if name.starts_with(".scribe-backup-")
+            && name.ends_with(".target")
+            && entry.file_type()?.is_file()
+            && !entry.path().with_extension("").exists()
+        {
+            fs::remove_file(entry.path())?;
+        }
+    }
+    Ok(())
+}
+
 /// The folder of a source: `<date>-<title-slug>-<id-suffix>`. An existing folder with the same
 /// source ID wins, because the date and title of one source can change between runs.
 pub fn directory(root: &Path, meta: &Metadata) -> Result<PathBuf> {
     fs::create_dir_all(root)?;
+    let _lock = publication_lock(root)?;
+    recover(root, meta)?;
     let suffix = id_suffix(&meta.id);
     for entry in fs::read_dir(root)? {
         let path = entry?.path();
-        if path.is_dir()
+        if !entry_name_is_transaction(&path)
+            && path.is_dir()
             && path
                 .file_name()
                 .is_some_and(|name| name.to_string_lossy().ends_with(&suffix))
@@ -66,25 +160,19 @@ pub fn directory(root: &Path, meta: &Metadata) -> Result<PathBuf> {
             return Ok(std::path::absolute(path)?);
         }
     }
-    let date = meta
-        .upload_date
-        .as_deref()
-        .filter(|d| d.len() == 8 && d.bytes().all(|b| b.is_ascii_digit()))
-        .map(str::to_owned)
-        .unwrap_or_else(today);
-    let name = format!("{date}-{}", slug(&meta.title));
     // Legacy folders have no ID or suffix. Match the source string independently of the
     // current title: a new X title cut must not orphan the earlier transcript and lessons.
     for entry in fs::read_dir(root)? {
         let legacy = entry?.path();
-        if legacy.join("index.md").is_file()
+        if !entry_name_is_transaction(&legacy)
+            && legacy.join("index.md").is_file()
             && stored(&legacy)
                 .is_some_and(|m| m["id"].is_null() && m["source"] == meta.source.as_str())
         {
             return Ok(std::path::absolute(legacy)?);
         }
     }
-    let dir = root.join(format!("{name}{suffix}"));
+    let dir = root.join(directory_name(meta));
     if let Some(other) = stored(&dir).filter(|m| m["id"] != meta.id.as_str()) {
         anyhow::bail!(
             "{} belongs to another source ({})",
@@ -95,6 +183,11 @@ pub fn directory(root: &Path, meta: &Metadata) -> Result<PathBuf> {
     fs::create_dir_all(&dir)?;
     // `absolute` avoids the `\\?\` prefix that `canonicalize` adds on Windows.
     Ok(std::path::absolute(dir)?)
+}
+
+fn entry_name_is_transaction(path: &Path) -> bool {
+    path.file_name()
+        .is_some_and(|name| name.to_string_lossy().starts_with(".scribe-"))
 }
 
 /// Write the file through a temporary sibling and a rename, so a reader never sees a partial file.
@@ -142,14 +235,16 @@ fn link_preserved(from: &Path, to: &Path) -> Result<()> {
 
 /// Stage a full publication beside the current directory. Only a completed stage can replace
 /// it. Two same-filesystem renames publish it; a failed second rename restores the old directory.
-/// The backup also retains the old publication if the process is killed between the renames.
+/// Directory lookup restores the recorded target if a kill interrupts the two renames.
 pub fn replace(dir: &Path, build: impl FnOnce(&Path) -> Result<PathBuf>) -> Result<PathBuf> {
     let parent = dir.parent().context("publication has no parent")?;
+    let _lock = publication_lock(parent)?;
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
         .as_nanos();
     let stage = parent.join(format!(".scribe-stage-{}-{nonce}", std::process::id()));
     let backup = parent.join(format!(".scribe-backup-{}-{nonce}", std::process::id()));
+    let record = backup.with_extension("target");
     fs::create_dir(&stage)?;
     let result = (|| {
         build(&stage)?;
@@ -163,6 +258,11 @@ pub fn replace(dir: &Path, build: impl FnOnce(&Path) -> Result<PathBuf>) -> Resu
                 link_preserved(&entry.path(), &stage.join(entry.file_name()))?;
             }
         }
+        let name = dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .context("publication folder name is not UTF-8")?;
+        write_atomic(&record, &serde_json::to_vec(name)?)?;
         fs::rename(dir, &backup)?;
         if let Err(error) = fs::rename(&stage, dir) {
             fs::rename(&backup, dir).with_context(|| {
@@ -184,6 +284,9 @@ pub fn replace(dir: &Path, build: impl FnOnce(&Path) -> Result<PathBuf>) -> Resu
     })();
     if stage.exists() {
         let _ = fs::remove_dir_all(&stage);
+    }
+    if !backup.exists() {
+        let _ = fs::remove_file(&record);
     }
     result
 }
@@ -549,6 +652,103 @@ mod tests {
     }
 
     #[test]
+    fn directory_restores_an_interrupted_force_before_the_skip_check() {
+        let root = temp_root("force-recovery");
+        let m = meta("youtube:a", "Video", Some("20260101"));
+        let dir = directory(&root, &m).unwrap();
+        publish(&dir, &m, "old");
+        fs::write(dir.join("lessons.md"), "lesson").unwrap();
+        fs::write(dir.join("audio.f32le"), "pcm").unwrap();
+        fs::write(dir.join("media.webm"), "media").unwrap();
+        let index = fs::read(dir.join("index.md")).unwrap();
+        let part = fs::read(dir.join("parts/01.md")).unwrap();
+        let backup = root.join(".scribe-backup-123-456");
+        let stage = root.join(".scribe-stage-123-456");
+        fs::create_dir(&stage).unwrap();
+        fs::write(stage.join("index.md"), "unfinished replacement").unwrap();
+        fs::rename(&dir, &backup).unwrap(); // Kill after the first rename.
+        let restored = directory(&root, &m).unwrap();
+        assert_eq!(restored, dir);
+        assert_eq!(fs::read(restored.join("index.md")).unwrap(), index);
+        assert_eq!(fs::read(restored.join("parts/01.md")).unwrap(), part);
+        assert_eq!(
+            fs::read_to_string(restored.join("lessons.md")).unwrap(),
+            "lesson"
+        );
+        assert_eq!(
+            fs::read_to_string(restored.join("audio.f32le")).unwrap(),
+            "pcm"
+        );
+        assert_eq!(
+            fs::read_to_string(restored.join("media.webm")).unwrap(),
+            "media"
+        );
+        assert!(!backup.exists());
+        assert!(!stage.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recovery_target_keeps_the_original_folder_when_metadata_changes() {
+        let root = temp_root("force-recovery-target");
+        let m = meta("youtube:a", "Original title", Some("20260101"));
+        let dir = directory(&root, &m).unwrap();
+        publish(&dir, &m, "old");
+        fs::write(dir.join("lessons.md"), "lesson").unwrap();
+        let backup = root.join(".scribe-backup-123-789");
+        let record = backup.with_extension("target");
+        fs::write(
+            &record,
+            serde_json::to_vec(dir.file_name().unwrap().to_str().unwrap()).unwrap(),
+        )
+        .unwrap();
+        fs::rename(&dir, &backup).unwrap();
+        let changed = meta("youtube:a", "Changed title", Some("20261007"));
+        assert_eq!(directory(&root, &changed).unwrap(), dir);
+        assert_eq!(
+            fs::read_to_string(dir.join("lessons.md")).unwrap(),
+            "lesson"
+        );
+        assert!(!record.exists());
+        assert!(!backup.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recovery_keeps_a_completed_replacement_and_does_not_restore_another_source() {
+        let root = temp_root("force-recovery-complete");
+        let m = meta("youtube:a", "Video", Some("20260101"));
+        let dir = directory(&root, &m).unwrap();
+        publish(&dir, &m, "old");
+        let backup = root.join(".scribe-backup-123-987");
+        let record = backup.with_extension("target");
+        fs::write(
+            &record,
+            serde_json::to_vec(dir.file_name().unwrap().to_str().unwrap()).unwrap(),
+        )
+        .unwrap();
+        fs::rename(&dir, &backup).unwrap();
+        fs::create_dir(&dir).unwrap();
+        publish(&dir, &m, "new"); // Kill after the second rename, before backup cleanup.
+        let other = meta("youtube:b", "Other", Some("20260102"));
+        let other_dir = directory(&root, &other).unwrap();
+        publish(&other_dir, &other, "other");
+        let other_backup = root.join(".scribe-backup-456-987");
+        fs::rename(&other_dir, &other_backup).unwrap();
+        assert_eq!(directory(&root, &m).unwrap(), dir);
+        assert!(
+            fs::read_to_string(dir.join("index.md"))
+                .unwrap()
+                .contains("new 0")
+        );
+        assert!(!backup.exists());
+        assert!(!record.exists());
+        assert!(other_backup.exists());
+        assert!(!other_dir.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn failed_force_write_preserves_the_complete_previous_publication() {
         let root = temp_root("force-failure");
         let m = meta("youtube:a", "Video", Some("20260101"));
@@ -634,7 +834,10 @@ mod tests {
             );
         }
         assert_eq!(
-            fs::read_dir(&root).unwrap().count(),
+            fs::read_dir(&root)
+                .unwrap()
+                .filter(|entry| entry.as_ref().unwrap().path().is_dir())
+                .count(),
             1,
             "successful publication cleans its stage and backup"
         );
