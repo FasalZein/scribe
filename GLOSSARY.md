@@ -10,6 +10,10 @@ Scribe turns spoken media into transcripts, and an agent extracts lessons from t
 The video or audio a transcript comes from: a URL (X post, YouTube, other yt-dlp site) or a local media file.
 _Avoid_: input, media, video (when the origin is meant)
 
+**Source ID**:
+The stable identity of a source, independent of its title and date: the X status ID, the yt-dlp extractor and ID, or a content hash of a local file.
+_Avoid_: slug, key, folder name
+
 **Transcript**:
 The timestamped text of one source, with its metadata and links back to the source.
 _Avoid_: captions, subtitles

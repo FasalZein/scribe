@@ -10,8 +10,8 @@ description: Transcribe videos and extract lessons into the knowledge library. U
 The library root is `$SCRIBE_LIBRARY`, default `~/Knowledge/scribe`:
 
 ```
-sources/<slug>/index.md        metadata, Sources, Chapters, Parts table (read this)
-sources/<slug>/parts/NN-*.md   transcript slices, about 2,500 words each (helpers read these)
+sources/<folder>/index.md      metadata, Sources, Chapters, Parts table (read this)
+sources/<folder>/parts/NN*.md  transcript slices, about 2,500 words each (helpers read these)
 sources/<slug>/transcript.md   full transcript (for grep)
 sources/<slug>/lessons.md      written by extraction
 topics/<topic>.md              merged lessons on one subject
@@ -44,7 +44,7 @@ Done when you hold a list of sources and the focus (or none).
 scribe <source>...
 ```
 
-stdout prints one absolute `index.md` path per source, in order. Progress goes to stderr. A source that already has an `index.md` is skipped and still printed, so re-running a list is safe. `--force` redoes a transcript and keeps its `lessons.md`. When a source fails, scribe continues with the others and exits non-zero; report the stderr line for each failed source.
+stdout prints one absolute `index.md` path per source, in order. Progress goes to stderr. A source that already has an `index.md` is skipped and still printed. scribe finds the folder by a stable source ID, not by title or date, so re-running a list is safe. `--force` redoes a transcript and keeps its `lessons.md`. When a source fails, scribe continues with the others and exits non-zero; report the stderr line for each failed source.
 
 A 30-minute video takes about 15-20 s to transcribe on Apple Silicon, plus download time. The first run downloads the 740 MB model.
 

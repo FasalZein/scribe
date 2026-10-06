@@ -85,11 +85,14 @@ scribe [OPTIONS] <INPUT>...
 
 The default model is
 [Parakeet TDT 0.6B v3 Q8_0 GGUF](https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf).
-It downloads 739,508,576 bytes on first use into the platform cache directory,
+The URL is pinned to Hugging Face commit `90f0824`, so the file cannot change
+under scribe. It downloads 739,508,576 bytes on first use into the platform cache directory,
 under `scribe/models/`. On macOS this is `~/Library/Caches/scribe/models/`.
-Downloads stream into a `.part` file, verify the expected byte count, then rename
-into place. A correctly sized cached model skips the download. Custom model URLs
-use their HTTP content length when available. Without a known size, scribe must
+Downloads stream into a `.part` file with a unique name per process, verify the
+expected byte count (and, for the default model, its SHA-256), then rename into
+place. A correctly sized cached model skips the download. Custom model URLs
+use their HTTP content length when available, and their cache name carries a
+SHA-256 prefix of the URL. Without a known size, scribe must
 download again to avoid trusting an unverified cache entry.
 
 The **model is licensed under CC-BY-4.0**, separately from this MIT-licensed CLI.
@@ -111,19 +114,23 @@ Without `-o`, scribe writes into the library at `$SCRIBE_LIBRARY/sources`.
 `SCRIBE_LIBRARY` defaults to `~/Knowledge/scribe`. With `-o DIR`, `DIR` is the
 root that receives the transcript folders. scribe creates missing directories.
 
-Each input creates `<root>/<YYYYMMDD>-<title-slug>/`:
+Each input creates `<root>/<YYYYMMDD>-<title-slug>-<id-suffix>/`. The suffix is
+the first 8 hex digits of the SHA-256 of the source ID (see below), for example
+`20260223-pi-durable-sessions-28bda125`.
 
-- `index.md`: the entry file. YAML frontmatter (the `transcript.md` fields plus
+- `index.md`: the entry file and the completion marker. YAML frontmatter (the `transcript.md` fields plus
   `parts`, `words` and `tokens_estimate`), title, Sources, optional Chapters, and
   a `## Parts` table. Each row has the part link, the time range, words,
   `tokens_estimate`, and the first 12 words of the part.
-- `parts/NN-<part-slug>.md`: the transcript in parts, numbered from `01`. Each
+- `parts/NN.md`, or `parts/NN-<chapter-slug>.md` for a source with chapters:
+  the transcript in parts, numbered from `01`. Part names never depend on the
+  transcript words, so links to a part survive `--force`. Each
   part has the source title, `Part N of M`, the time range `[hh:mm:ss–hh:mm:ss]`,
   the chapter title if any, and then its `[hh:mm:ss] text` paragraphs.
 - `transcript.md`: YAML frontmatter, title, Sources, optional Chapters, and all
   timestamped paragraphs.
 - `segments.jsonl`: `{"start":0.0,"end":60.0,"text":"..."}` rows, in seconds.
-- `meta.json`: the metadata subset used, including structured `sources` and
+- `meta.json`: the metadata subset used, including the source `id`, structured `sources` and
   `chapters` when present, or local file information.
 - With `--keep-media`: `audio.f32le` (16 kHz, mono, little-endian float32) and,
   for yt-dlp URL inputs, the downloaded `media.<extension>`. X API streams do
@@ -131,24 +138,56 @@ Each input creates `<root>/<YYYYMMDD>-<title-slug>/`:
 
 Parts follow the source's chapters when it has any. A part holds whole engine
 segments, assigned to the chapter that holds the segment midpoint. A chapter that holds no segment midpoint, such as a short silent intro, gets no part. A chapter longer
-than about 2,500 words continues in more parts, named `NN-<chapter>-a`,
-`NN-<chapter>-b`, and so on. Without chapters, a part ends at the first segment
-boundary after it reaches 2,500 words, so a part can be slightly longer. The part
-slug is the chapter title, or the first words of the part. `tokens_estimate` is
+than about 2,500 words continues in more parts, named `NN-<chapter>-1`,
+`NN-<chapter>-2`, and so on. Without chapters, a part ends at the first segment
+boundary after it reaches 2,500 words, so a part can be slightly longer. `tokens_estimate` is
 `round(words × 1.33)`, a rough size estimate for English text, not a tokenizer
 count. `words` counts whitespace-separated words of the transcript text.
 
 The date comes from the upload date, or today's UTC date when absent. The title
-slug has at most 60 characters. If `<folder>/index.md` already exists, scribe
-skips that input before it downloads or transcribes media. It logs
+slug has at most 60 characters.
+
+The source ID identifies a source independently of its title and date
+(`docs/adr/0004-source-id.md`):
+
+- X post: `x:<status id>`, also when the X API fails and yt-dlp is used.
+- yt-dlp source: `<extractor_key>:<id>` in lower case, for example `youtube:UNP03fDSj1U`.
+- Local file: `file:` and a SHA-256 over the file size and its first and last MiB.
+  The same file at another path or on another day has the same ID.
+
+scribe stores the ID in `meta.json` (`id`) and in the frontmatter (`source_id`).
+Before it downloads or transcribes media, scribe looks for a folder whose suffix and
+stored ID match. If that folder has `index.md`, scribe skips the input, logs
 `skip: <path> exists (use --force)` and still prints the index path. For URLs,
-the folder name comes from metadata, so the skip check still fetches metadata.
-`--force` replaces the index, parts, transcript, segments and metadata, and
-keeps `lessons.md` and other files in the folder. Two sources with the same date
-and title slug share a folder; the second one is skipped. scribe writes
-`index.md` last, so a failed transcription leaves no index and the next run
-redoes it. Temporary downloads are removed on normal success or error; an abrupt
-process termination can leave a temporary directory.
+the skip check still fetches metadata. Two sources with the same date and title
+slug get different folders. A folder from before source IDs (no suffix, no `id`)
+is reused when its `meta.json` has the same `source`.
+
+Every output file is written to a temporary file and renamed into place.
+`index.md` is renamed last, so an interrupted or failed run leaves no index and
+the next run redoes the source. `--force` keeps the old transcript until the new
+one is transcribed. Then it removes the index, parts, `audio.f32le` and `media.*`,
+writes the new files, and keeps `lessons.md` and other files in the folder.
+Temporary downloads are removed on normal success or error; an abrupt process
+termination can leave a temporary directory.
+
+### Truncation checks and timeouts
+
+ffmpeg exits 0 for a truncated file or a dropped connection and reports the
+problem only on standard error. scribe fails the source on any ffmpeg error
+output (`-loglevel error -xerror`). It also fails the source when the decoded audio
+is shorter than the reported duration by more than 5 s or 1 %, whichever is larger.
+The slack covers whole-second durations from yt-dlp and audio tracks that end
+slightly before the video. The reported duration comes from yt-dlp, the X API, or
+`ffprobe` for local files. Without a duration, scribe warns and relies on the
+ffmpeg error check.
+
+Network waits are bounded, so one stalled source fails and the run continues:
+
+- HTTP requests (X API, model download): 15-30 s connect and 60-120 s read timeouts.
+- ffmpeg reading an X video URL: `-rw_timeout` of 30 s, and only the `https`,
+  `tls` and `tcp` protocols, because a third-party API supplies the URL.
+- yt-dlp: `--socket-timeout 30`.
 
 ### X API and source references
 
@@ -190,7 +229,11 @@ search interval; flat signals use the hard boundary. Chunks are contiguous with 
 overlap. Shorter target lengths search only within that chunk. The engine loads
 one model per run and uses its batch API for chunks, reusing the model for later
 inputs. Timestamps use engine segments when available, or chunk offsets otherwise.
-Audio and batch state remain in memory, so very long recordings need more RAM.
+The engine runs 16 chunks per batch, so its memory does not grow with the
+recording. The decoded audio stays in memory (about 230 MB per hour). On the
+27:26 talk, peak memory fell from 1.95 GB to 1.42 GB; on a 1:49:46 recording
+it fell from 4.12 GB to 1.81 GB. A chunk shorter than 1 s joins the previous
+chunk, because the engine rejects tiny chunks.
 The default target is 30 s because transcribe-cpp's Parakeet drops whole sentences
 from chunks near 60 s (see `docs/adr/0003-30-second-chunks.md`).
 
