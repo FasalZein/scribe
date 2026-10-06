@@ -4,7 +4,7 @@
 # Usage: scripts/linux-test.sh [arm64|amd64]   (default: arm64)
 #
 # Steps: build the image, cargo build --release, cargo test, the ignored
-# regression test, and one end-to-end transcription of a 3-minute clip.
+# regression test, installer preservation checks, and a 3-minute transcription.
 # Environment:
 #   SCRIBE_TEST_MODEL  Parakeet GGUF on the host (mounted read-only). Required.
 #   SCRIBE_TEST_MEDIA  media file on the host (mounted read-only). Required.
@@ -46,6 +46,8 @@ docker run --rm --platform "linux/$arch" \
     now() { date +%s; }
     echo "== $(uname -m), $(nproc) CPUs"
     t=$(now); cargo build --release --locked; echo "== build: $(( $(now) - t )) s"
+    SCRIBE_INSTALL_TEST_BINARY=/target/release/scribe sh /src/scripts/tests/install-check.sh
+    /target/release/scribe doctor --backend cpu --model /model.gguf
     t=$(now); cargo test --release --locked; echo "== cargo test: $(( $(now) - t )) s"
     t=$(now)
     SCRIBE_REGRESSION_MODEL=/model.gguf SCRIBE_REGRESSION_MEDIA=/media/input \

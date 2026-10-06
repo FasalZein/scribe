@@ -3,8 +3,8 @@
 #
 # - Installs scribe when it is missing or older than this skill's version:
 #   downloads the prebuilt binary for this OS and CPU from the latest GitHub
-#   Release, verifies its SHA-256 and copies it to $SCRIBE_INSTALL_DIR
-#   (default ~/.local/bin). Without a matching binary, builds from source
+#   Release, verifies SHA-256, --version and doctor before replacement in $SCRIBE_INSTALL_DIR
+#   (default ~/.local/bin). On any release failure, builds from source
 #   with cargo when cargo, cmake and a C++ compiler exist.
 # - Checks ffmpeg, ffprobe, and uvx or yt-dlp. Prints the install command for
 #   each missing tool. It never runs a package manager or sudo.
@@ -65,7 +65,31 @@ install_hint() {
 
 # --- scribe -----------------------------------------------------------------
 # Prints the version of the scribe binary at $1, or nothing.
-scribe_version() { "$1" --version 2>/dev/null | awk '{ print $2 }'; }
+scribe_version() {
+  version_output=$("$1" --version 2>/dev/null) || return 1
+  printf '%s\n' "$version_output" | awk '$1 == "scribe" && $2 ~ /^[0-9]+[.][0-9]+[.][0-9]+$/ { print $2; exit }'
+}
+
+check_candidate() {
+  candidate_version=$(scribe_version "$1") || { say "candidate --version failed: $1"; return 1; }
+  if [ -z "$candidate_version" ] || [ "$(version_ge "$candidate_version" "$skill_version")" != 1 ]; then
+    say "candidate is older than this skill ($skill_version) or has no version: $1"
+    return 1
+  fi
+  "$1" doctor || { say "candidate doctor failed: $1"; return 1; }
+}
+
+# Stage beside the target for an atomic rename. Never replace an unchecked binary.
+publish_candidate() {
+  check_candidate "$1" || return 1
+  mkdir -p "$install_dir" || return 1
+  staged=$(mktemp "$install_dir/.scribe.new.XXXXXX") || return 1
+  if cp "$1" "$staged" && chmod 755 "$staged" && mv -f "$staged" "$install_dir/scribe"; then
+    return 0
+  fi
+  rm -f "$staged"
+  return 1
+}
 
 find_scribe() {
   if [ -x "$install_dir/scribe" ]; then say "$install_dir/scribe"
@@ -128,10 +152,7 @@ install_release() {
   fi
   say "SHA-256 verified: $actual"
   tar -xzf "$tmp/$asset" -C "$tmp" scribe || { rm -rf "$tmp"; return 1; }
-  mkdir -p "$install_dir" || { rm -rf "$tmp"; return 1; }
-  # Copy next to the target, then rename, so a running scribe is never half-written.
-  cp "$tmp/scribe" "$install_dir/.scribe.new" && chmod 755 "$install_dir/.scribe.new" \
-    && mv -f "$install_dir/.scribe.new" "$install_dir/scribe"
+  chmod 755 "$tmp/scribe" && publish_candidate "$tmp/scribe"
   status=$?
   rm -rf "$tmp"
   [ $status -eq 0 ] && say "installed $install_dir/scribe ($tag)"
@@ -142,14 +163,18 @@ install_from_source() {
   cxx=""; for c in c++ g++ clang++; do have "$c" && { cxx=$c; break; }; done
   if have cargo && have cmake && [ -n "$cxx" ]; then
     say "building scribe from source with cargo (a few minutes)"
-    if cargo install --locked --git "https://github.com/$REPO" --tag "v$skill_version" scribe; then
-      # Copy the build to install_dir, which find_scribe checks first.
-      built="${CARGO_HOME:-$HOME/.cargo}/bin/scribe"
-      mkdir -p "$install_dir" && cp "$built" "$install_dir/.scribe.new" && chmod 755 "$install_dir/.scribe.new" \
-        && mv -f "$install_dir/.scribe.new" "$install_dir/scribe" && return 0
-      problem "scribe: built $built but cannot copy it to $install_dir"
+    # An isolated cargo root keeps a failed build from replacing a binary on PATH.
+    build_root=$(mktemp -d) || return 1
+    if cargo install --locked --root "$build_root" --git "https://github.com/$REPO" --tag "v$skill_version" scribe; then
+      if publish_candidate "$build_root/bin/scribe"; then
+        rm -rf "$build_root"
+        return 0
+      fi
+      rm -rf "$build_root"
+      problem "scribe: source build failed its readiness check or cannot be installed"
       return 1
     fi
+    rm -rf "$build_root"
     problem "cargo install --git https://github.com/$REPO --tag v$skill_version failed; see the output above"
     return 1
   fi
@@ -179,12 +204,8 @@ else
   fi
   case $? in
     0) ;;
-    2) install_from_source ;;
-    *) if have curl || have wget; then
-         problem "scribe: the release download failed; see the output above"
-       else
-         problem "curl: not found; it downloads scribe. Install: $(install_hint curl)"
-       fi ;;
+    *) say "release install failed; keeping the old binary and trying a source build"
+       install_from_source ;;
   esac
   current=$(find_scribe)
   [ -n "$current" ] && current_version=$(scribe_version "$current")
@@ -214,6 +235,10 @@ done
 if have uvx; then say "ok: uvx (runs yt-dlp@latest)"
 elif have yt-dlp; then say "ok: yt-dlp (keep it current; old versions get HTTP 403 from YouTube)"
 else problem "uvx or yt-dlp: not found. Install uv: $(install_hint uv)"
+fi
+
+if [ -n "$current" ] && ! "$current" doctor; then
+  problem "scribe: doctor failed for $current; see the output above"
 fi
 
 if [ -n "$missing" ]; then

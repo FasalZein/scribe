@@ -1,5 +1,6 @@
 mod audio;
 mod cli;
+mod doctor;
 mod engine;
 mod fetch;
 mod known_terms;
@@ -186,6 +187,7 @@ fn transcribe(
 fn run(cli: Cli) -> Result<bool> {
     if let Some(command) = &cli.command {
         match command {
+            cli::Command::Doctor(args) => doctor::run(args)?,
             cli::Command::Lessons { action } => match action {
                 cli::LessonsAction::Check { file } => lessons::check(file)?,
                 cli::LessonsAction::Finalize { file } => lessons::finalize(file)?,

@@ -59,6 +59,8 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Report backend, devices, runtime tools and cache; test cached models without downloads
+    Doctor(crate::doctor::Doctor),
     /// Plan topic notes or rebuild their index (no model needed)
     Topics {
         #[command(subcommand)]

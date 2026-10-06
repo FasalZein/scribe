@@ -2,8 +2,8 @@
 #
 # - Installs scribe when it is missing or older than this skill's version:
 #   downloads the prebuilt binary from the latest GitHub Release, verifies its
-#   SHA-256 and copies it to $env:SCRIBE_INSTALL_DIR (default ~/.local/bin).
-#   Without a matching binary, builds from source with cargo when cargo, cmake
+#   SHA-256, --version and doctor before replacement in $env:SCRIBE_INSTALL_DIR.
+#   On any release failure, builds from source with cargo when cargo, cmake
 #   and a C++ compiler (cl.exe or clang++) exist.
 # - Checks ffmpeg, ffprobe, and uvx or yt-dlp. Prints the winget command for
 #   each missing tool. It never runs a package manager.
@@ -17,7 +17,11 @@ $Missing = New-Object System.Collections.Generic.List[string]
 
 function Have($name) { [bool](Get-Command $name -ErrorAction SilentlyContinue) }
 function ScribeVersion($path) {
-    try { ((& $path --version 2>$null) -split ' ')[1] } catch { $null }
+    try {
+        $output = & $path --version 2>$null
+        if ($LASTEXITCODE -ne 0 -or $output -notmatch '^scribe ([0-9]+\.[0-9]+\.[0-9]+)$') { return $null }
+        return $Matches[1]
+    } catch { return $null }
 }
 function FindScribe {
     if (Test-Path $Exe) { return $Exe }
@@ -29,6 +33,30 @@ function FindScribe {
 # The skill folder has no Cargo.toml; SKILL.md metadata carries the version (CI checks it matches).
 $SkillVersion = (Select-String -Path (Join-Path $SkillDir 'SKILL.md') -Pattern '^  version: "(.*)"' |
     Select-Object -First 1).Matches[0].Groups[1].Value
+
+function CheckCandidate($path) {
+    $candidateVersion = ScribeVersion $path
+    if (-not $candidateVersion -or ([version]$candidateVersion -lt [version]$SkillVersion)) {
+        Write-Host "candidate --version failed or is older than this skill ($SkillVersion): $path"
+        return $false
+    }
+    try {
+        & $path doctor | Out-Host
+        if ($LASTEXITCODE -ne 0) { Write-Host "candidate doctor failed: $path"; return $false }
+    } catch { Write-Host "candidate doctor failed: $_"; return $false }
+    return $true
+}
+
+function PublishCandidate($path) {
+    if (-not (CheckCandidate $path)) { return $false }
+    New-Item -ItemType Directory -Force $InstallDir | Out-Null
+    $staged = Join-Path $InstallDir ('.scribe.new.' + [guid]::NewGuid() + '.exe')
+    try {
+        Copy-Item $path $staged
+        Move-Item $staged $Exe -Force
+        return $true
+    } finally { Remove-Item $staged -Force -ErrorAction SilentlyContinue }
+}
 
 # Returns 0 on success, 2 when no release asset matches, 1 on other failures.
 function InstallRelease {
@@ -53,8 +81,7 @@ function InstallRelease {
         if ($expected -ne $actual) { Write-Host "SHA-256 mismatch for ${asset}: expected $expected, got $actual"; return 1 }
         Write-Host "SHA-256 verified: $actual"
         Expand-Archive (Join-Path $tmp $asset) -DestinationPath $tmp -Force
-        New-Item -ItemType Directory -Force $InstallDir | Out-Null
-        Copy-Item (Join-Path $tmp 'scribe.exe') $Exe -Force
+        if (-not (PublishCandidate (Join-Path $tmp 'scribe.exe'))) { return 1 }
         Write-Host "installed $Exe ($tag)"
         return 0
     } catch { Write-Host "install failed: $_"; return 1 }
@@ -65,14 +92,19 @@ function InstallFromSource {
     $cxx = (Have 'cl') -or (Have 'clang++')
     if ((Have 'cargo') -and (Have 'cmake') -and $cxx) {
         Write-Host 'building scribe from source with cargo (a few minutes)'
-        & cargo install --locked --git "https://github.com/$Repo" --tag "v$SkillVersion" scribe
-        if ($LASTEXITCODE -ne 0) { $Missing.Add("cargo install --git https://github.com/$Repo --tag v$SkillVersion failed; see the output above"); return }
-        # Copy the build to the install dir, which FindScribe checks first.
-        $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $HOME '.cargo' }
+        # Build in an isolated root so cargo cannot overwrite a working binary on PATH.
+        $buildRoot = Join-Path ([IO.Path]::GetTempPath()) ('scribe-build-' + [guid]::NewGuid())
         try {
-            New-Item -ItemType Directory -Force $InstallDir | Out-Null
-            Copy-Item (Join-Path $cargoHome 'bin\scribe.exe') $Exe -Force
-        } catch { $Missing.Add("scribe: built in $cargoHome\bin but cannot copy it to ${InstallDir}: $_") }
+            & cargo install --locked --root $buildRoot --git "https://github.com/$Repo" --tag "v$SkillVersion" scribe | Out-Host
+            if ($LASTEXITCODE -ne 0) {
+                $Missing.Add("cargo install --git https://github.com/$Repo --tag v$SkillVersion failed; see the output above")
+                return
+            }
+            if (-not (PublishCandidate (Join-Path $buildRoot 'bin\scribe.exe'))) {
+                $Missing.Add('scribe: source build failed its readiness check')
+            }
+        } catch { $Missing.Add("scribe: source build cannot be installed: $_") }
+        finally { Remove-Item -Recurse -Force $buildRoot -ErrorAction SilentlyContinue }
         return
     }
     $Missing.Add('scribe: no prebuilt binary and cannot build from source. Install: winget install Rustlang.Rustup Kitware.CMake Microsoft.VisualStudio.2022.BuildTools (with the C++ workload), then run this script again.')
@@ -88,7 +120,7 @@ if ($version -and ([version]$version -ge [version]$SkillVersion)) {
     switch (InstallRelease) {
         0 { }
         2 { InstallFromSource }
-        default { $Missing.Add('scribe: the release download failed; see the output above') }
+        default { Write-Host 'release install failed; keeping the old binary and trying a source build'; InstallFromSource }
     }
     $current = FindScribe
     $version = if ($current) { ScribeVersion $current } else { $null }
@@ -113,6 +145,13 @@ foreach ($tool in 'ffmpeg', 'ffprobe') {
 if (Have 'uvx') { Write-Host 'ok: uvx (runs yt-dlp@latest)' }
 elseif (Have 'yt-dlp') { Write-Host 'ok: yt-dlp (keep it current; old versions get HTTP 403 from YouTube)' }
 else { $Missing.Add('uvx or yt-dlp: not found. Install uv: winget install astral-sh.uv') }
+
+if ($current) {
+    try {
+        & $current doctor | Out-Host
+        if ($LASTEXITCODE -ne 0) { $Missing.Add("scribe: doctor failed for $current; see the output above") }
+    } catch { $Missing.Add("scribe: doctor failed for ${current}: $_") }
+}
 
 if ($Missing.Count -gt 0) {
     Write-Host ''
