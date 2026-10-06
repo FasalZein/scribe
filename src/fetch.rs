@@ -87,7 +87,8 @@ pub enum Media {
 /// Media known after the metadata fetch. A yt-dlp page still needs a download.
 pub enum Pending {
     Ready(Media),
-    YtDlp(String),
+    /// The `--dump-single-json` output, so the download reuses the extraction.
+    YtDlp(Vec<u8>),
 }
 impl Media {
     pub fn input(&self) -> &std::ffi::OsStr {
@@ -170,16 +171,20 @@ pub fn media(input: &str) -> Result<(Metadata, Pending)> {
             })
             .collect(),
     };
-    Ok((meta, Pending::YtDlp(input.to_owned())))
+    Ok((meta, Pending::YtDlp(output.stdout)))
 }
 
 /// Resolve media only after the existing index check.
 pub fn resolve(media: Pending, workspace: &Path) -> Result<Media> {
-    let input = match media {
+    let info = match media {
         Pending::Ready(media) => return Ok(media),
-        Pending::YtDlp(input) => input,
+        Pending::YtDlp(info) => info,
     };
-    eprintln!("Downloading media: {input}");
+    // A second extraction costs seconds on YouTube (page fetch and JS challenge). The format
+    // URLs in the saved JSON stay valid for hours, far longer than this run needs.
+    let info_path = workspace.join("info.json");
+    fs::write(&info_path, info)?;
+    eprintln!("Downloading media");
     let output_path = command_output(
         yt_dlp()?
             .args([
@@ -193,7 +198,8 @@ pub fn resolve(media: Pending, workspace: &Path) -> Result<Media> {
                 "-o",
             ])
             .arg(workspace.join("media.%(ext)s"))
-            .args(["--", &input]),
+            .arg("--load-info-json")
+            .arg(&info_path),
         "yt-dlp",
     )?;
     let path = String::from_utf8_lossy(&output_path.stdout)
