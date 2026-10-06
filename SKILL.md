@@ -22,7 +22,7 @@ topics/INDEX.md                one line per topic
 
 ### 1. Check the tools
 
-Run `scribe --version`, `ffprobe -version` and `uvx --version` (or `yt-dlp --version`). If one fails, run `<this skill's directory>/scripts/install.sh` (on Windows, `scripts/install.ps1`) and follow what it prints. The script installs `scribe` and checks ffmpeg, ffprobe, and uvx or yt-dlp. It prints the install command for each missing tool; run those commands only with the user's approval.
+Run `scribe --version`, `ffprobe -version` and `uvx --version` (or `yt-dlp --version`). If one fails, run `sh <this skill's directory>/scripts/install.sh` (on Windows, `powershell -ExecutionPolicy Bypass -File <this skill's directory>\scripts\install.ps1`) and follow what it prints. The script installs `scribe` and checks ffmpeg, ffprobe, and uvx or yt-dlp. It prints the install command for each missing tool; run those commands only with the user's approval.
 
 Done when every version command succeeds, or the install script exits 0.
 

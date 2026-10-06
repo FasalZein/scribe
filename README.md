@@ -16,6 +16,8 @@ The first time the agent uses the skill, it runs `scripts/install.sh` (`scripts/
 sh ~/.agents/skills/scribe/scripts/install.sh
 ```
 
+On Windows: `powershell -ExecutionPolicy Bypass -File $HOME\.agents\skills\scribe\scripts\install.ps1`.
+
 The installer:
 
 - downloads the prebuilt `scribe` for your OS and CPU from the [latest release](https://github.com/FasalZein/scribe/releases/latest), verifies its SHA-256, and installs it to `${SCRIBE_INSTALL_DIR:-$HOME/.local/bin}`;
