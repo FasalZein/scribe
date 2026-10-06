@@ -1083,7 +1083,8 @@ mod tests {
                 && index.contains("None: the model gives no word scores."),
             "{index}"
         );
-        clear(&dir).unwrap();
+        fs::remove_dir_all(&dir).unwrap();
+        fs::create_dir_all(&dir).unwrap();
         write(
             &dir,
             &m,
