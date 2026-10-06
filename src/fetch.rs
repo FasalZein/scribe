@@ -11,10 +11,10 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-const DEFAULT_MODEL_BYTES: u64 = 739_508_576;
+const DEFAULT_MODEL_BYTES: u64 = 740_363_168;
 /// SHA-256 of the default model at the pinned revision in `DEFAULT_MODEL`.
 const DEFAULT_MODEL_SHA256: &str =
-    "5859f77944efcd8eafa23a6350731960b2b55b2203df51f319665c807d802cc7";
+    "007a59761e9258779f189df396b50d12b83bb5b79e66df4b955c230d2f2a0a59";
 /// yt-dlp gives up on a socket that makes no progress for this many seconds.
 const SOCKET_TIMEOUT_SECS: &str = "30";
 /// A local source ID hashes this many bytes from each end of the file.
@@ -249,9 +249,8 @@ pub fn model(input: &str) -> Result<PathBuf> {
                 .and_then(|s| s.parse::<u64>().ok())
         })
     };
-    if let (Some(size), Ok(info)) = (expected, fs::metadata(&path))
-        && info.len() == size
-    {
+    let digest = (input == DEFAULT_MODEL).then_some(DEFAULT_MODEL_SHA256);
+    if is_cached(&path, expected, digest) {
         return Ok(path);
     }
     eprintln!("Downloading model: {input}");
@@ -261,9 +260,25 @@ pub fn model(input: &str) -> Result<PathBuf> {
             .header("content-length")
             .and_then(|s| s.parse().ok())
     });
-    let digest = (input == DEFAULT_MODEL).then_some(DEFAULT_MODEL_SHA256);
     download(response.into_reader(), &path, expected, digest)?;
     Ok(path)
+}
+
+/// A cached model is reused when its size matches and, for the default model, its SHA-256.
+/// The hash keeps a different or damaged file at the cache path from loading as the default
+/// model. It costs about 1.5 s for 740 MB on an M4 Pro (sha2 without its `asm` feature uses no
+/// ARM SHA instructions); the loader thread runs it while the media decodes (ADR 0005).
+fn is_cached(path: &Path, expected: Option<u64>, sha256: Option<&str>) -> bool {
+    let (Some(size), Ok(info)) = (expected, fs::metadata(path)) else {
+        return false;
+    };
+    info.len() == size
+        && sha256.is_none_or(|sha256| {
+            let mut hasher = Sha256::new();
+            fs::File::open(path)
+                .and_then(|mut file| std::io::copy(&mut file, &mut hasher))
+                .is_ok_and(|_| hex(&hasher.finalize()) == sha256)
+        })
 }
 
 fn download(
@@ -640,6 +655,25 @@ mod tests {
             fs::read_dir(&dir).unwrap().count(),
             1,
             "no .part file is left"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn cached_model_needs_matching_size_and_sha256() {
+        let dir = temp_dir("cached");
+        let path = dir.join("model.gguf");
+        let data = b"model bytes";
+        let digest = sha256_hex(data);
+        assert!(!is_cached(&path, Some(11), Some(&digest)), "missing file");
+        fs::write(&path, data).unwrap();
+        assert!(is_cached(&path, Some(11), Some(&digest)));
+        assert!(is_cached(&path, Some(11), None));
+        assert!(!is_cached(&path, Some(12), None), "size differs");
+        assert!(!is_cached(&path, None, None), "size unknown");
+        fs::write(&path, b"other bytes").unwrap();
+        assert!(
+            !is_cached(&path, Some(11), Some(&digest)),
+            "same size, other content"
         );
         fs::remove_dir_all(dir).unwrap();
     }

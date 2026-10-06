@@ -159,19 +159,20 @@ mod tests {
     /// The first 70 s of the source still get that chunk boundary at the old
     /// 60 s default, so this short slice is enough to reproduce the loss.
     #[test]
-    #[ignore = "needs a Parakeet GGUF and the Pi durable-sessions talk; set SCRIBE_REGRESSION_MODEL and SCRIBE_REGRESSION_MEDIA"]
+    #[ignore = "needs the Pi durable-sessions talk in SCRIBE_REGRESSION_MEDIA; SCRIBE_REGRESSION_MODEL overrides the default model"]
     fn default_chunks_keep_the_sentence_long_chunks_dropped() {
-        let (Ok(model), Ok(media)) = (
-            std::env::var("SCRIBE_REGRESSION_MODEL"),
-            std::env::var("SCRIBE_REGRESSION_MEDIA"),
-        ) else {
-            eprintln!("skip: SCRIBE_REGRESSION_MODEL or SCRIBE_REGRESSION_MEDIA is not set");
+        let Ok(media) = std::env::var("SCRIBE_REGRESSION_MEDIA") else {
+            eprintln!("skip: SCRIBE_REGRESSION_MEDIA is not set");
             return;
         };
+        let model = std::env::var("SCRIBE_REGRESSION_MODEL")
+            .unwrap_or_else(|_| crate::cli::DEFAULT_MODEL.to_owned());
         let cli = Cli::parse_from(["scribe", &media, "--model", &model]);
         let pcm = crate::audio::decode(media.as_ref(), false, None).unwrap();
         let pcm = &pcm[..70 * SAMPLE_RATE];
-        let mut engine = Engine::load(model.as_ref(), &cli).unwrap();
+        // The default model comes from the cache, or downloads once and is verified.
+        let model = crate::fetch::model(&model).unwrap();
+        let mut engine = Engine::load(&model, &cli).unwrap();
         let text = engine
             .transcribe(pcm, cli.chunk_secs)
             .unwrap()

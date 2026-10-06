@@ -9,7 +9,7 @@ Rust CLI (`src/`) plus the agent skill in `skills/scribe/` (`SKILL.md`, `referen
 | Command | What it does |
 | --- | --- |
 | `cargo build --release && cargo test && cargo clippy --all-targets -- -D warnings && cargo fmt --check` | Full check. Run before handoff. |
-| `SCRIBE_REGRESSION_MODEL=<gguf> SCRIBE_REGRESSION_MEDIA=<Pi durable-sessions talk> cargo test --release -- --ignored` | Lost-speech regression test; plain `cargo test` skips it. Run after any change to chunking or the engine. |
+| `SCRIBE_REGRESSION_MEDIA=<Pi durable-sessions talk> cargo test --release -- --ignored` | Lost-speech regression test with the default model (cached or downloaded); `SCRIBE_REGRESSION_MODEL=<gguf>` overrides it. Plain `cargo test` skips it. Run after any change to chunking, the engine or the default model. |
 | `scribe <source> --timings` | Per-stage wall times on stderr; see ADR 0005 for how to read them. |
 | `SCRIBE_TEST_MODEL=<gguf> SCRIBE_TEST_MEDIA=<mp4> scripts/linux-test.sh [arm64\|amd64]` | Linux CPU build, tests and a 3-minute end-to-end run in Docker. |
 | `git tag vX.Y.Z && git push origin vX.Y.Z` | Release: `.github/workflows/release.yml` builds and attaches the binaries. The tag must equal `version` in `Cargo.toml` and `metadata.version` in `skills/scribe/SKILL.md`; CI fails when they differ, and the installer reads the SKILL.md value. |
