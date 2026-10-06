@@ -164,6 +164,16 @@ pub fn decode_blocks(
     command.args(["-nostdin", "-hide_banner", "-loglevel", "error", "-xerror"]);
     if network {
         command.args(["-rw_timeout", NETWORK_TIMEOUT_MICROS]);
+        // These options also work on ffmpeg versions before 4.4. Do not reconnect at
+        // normal EOF: an MP4 stream has a finite end, unlike a live broadcast.
+        command.args([
+            "-reconnect",
+            "1",
+            "-reconnect_streamed",
+            "1",
+            "-reconnect_delay_max",
+            "10",
+        ]);
         command.args(["-protocol_whitelist", "https,tls,tcp"]);
     }
     let sample_rate = SAMPLE_RATE.to_string();
@@ -253,6 +263,72 @@ pub fn check_complete(samples: usize, expected: Option<f64>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    #[test]
+    fn reconnect_options_child() {
+        if std::env::var_os("SCRIBE_FFMPEG_TEST_ARGS").is_none() {
+            return;
+        }
+        let network = std::env::var_os("SCRIBE_FFMPEG_TEST_NETWORK").is_some();
+        assert_eq!(
+            decode_blocks("https://stream.invalid/video.mp4".as_ref(), network, |_| {
+                true
+            })
+            .unwrap(),
+            1
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn network_decode_passes_reconnect_options_before_the_input() {
+        use std::{fs, os::unix::fs::PermissionsExt, process::Command};
+        let dir =
+            std::env::temp_dir().join(format!("scribe-test-reconnect-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let ffmpeg = dir.join("ffmpeg");
+        fs::write(&ffmpeg, "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$SCRIBE_FFMPEG_TEST_ARGS\"\nprintf '\\000\\000\\000\\000'\n").unwrap();
+        fs::set_permissions(&ffmpeg, fs::Permissions::from_mode(0o755)).unwrap();
+        for network in [true, false] {
+            let args_path = dir.join(if network { "stream-args" } else { "local-args" });
+            let mut child = Command::new(std::env::current_exe().unwrap());
+            child
+                .args([
+                    "--exact",
+                    "audio::tests::reconnect_options_child",
+                    "--nocapture",
+                ])
+                .env("PATH", &dir)
+                .env("SCRIBE_FFMPEG_TEST_ARGS", &args_path);
+            if network {
+                child.env("SCRIBE_FFMPEG_TEST_NETWORK", "1");
+            } else {
+                child.env_remove("SCRIBE_FFMPEG_TEST_NETWORK");
+            }
+            let output = child.output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let args = fs::read_to_string(args_path).unwrap();
+            if network {
+                assert!(
+                    args.contains(
+                        "-reconnect\n1\n-reconnect_streamed\n1\n-reconnect_delay_max\n10\n"
+                    ),
+                    "{args}"
+                );
+                assert!(args.find("-reconnect\n").unwrap() < args.find("-i\n").unwrap());
+            } else {
+                assert!(
+                    !args.contains("-reconnect"),
+                    "local files must not reconnect"
+                );
+            }
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
     #[test]
     fn chooses_silence_before_target() {
         let mut pcm = vec![0.5; 70 * SAMPLE_RATE];

@@ -1,7 +1,7 @@
 use crate::cli::DEFAULT_MODEL;
 use crate::sources::{Chapter, Sources};
 use anyhow::{Context, Result, bail, ensure};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     fs,
@@ -220,7 +220,11 @@ pub fn model(input: &str) -> Result<PathBuf> {
     let cache = dirs::cache_dir()
         .context("platform cache directory is unavailable")?
         .join("scribe/models");
-    fs::create_dir_all(&cache)?;
+    model_in_cache(input, &cache)
+}
+
+fn model_in_cache(input: &str, cache: &Path) -> Result<PathBuf> {
+    fs::create_dir_all(cache)?;
     let name = input
         .split('?')
         .next()
@@ -237,10 +241,30 @@ pub fn model(input: &str) -> Result<PathBuf> {
         // A fixed hash keeps the cache name across Rust releases, unlike DefaultHasher.
         cache.join(format!("{}-{name}", &sha256_hex(input.as_bytes())[..16]))
     };
+    // The OS releases this lock even after SIGKILL. Keep the lock file itself stable:
+    // unlinking it could let a third process lock a different inode during a download.
+    let lock = fs::File::options()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(cache.join(".download.lock"))?;
+    lock.lock()?;
+    sweep_partials(cache)?;
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(30))
         .timeout_read(Duration::from_secs(120))
         .build();
+    if input != DEFAULT_MODEL {
+        let completed = fs::read(sidecar(&path, ".complete.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<CompletedRecord>(&bytes).ok());
+        if let Some(record) = completed.filter(|r| r.url == input && r.size > 0)
+            && is_cached(&path, Some(record.size), Some(&record.sha256))
+        {
+            return Ok(path);
+        }
+    }
+    let digest = (input == DEFAULT_MODEL).then_some(DEFAULT_MODEL_SHA256);
     let expected = if input == DEFAULT_MODEL {
         Some(DEFAULT_MODEL_BYTES)
     } else {
@@ -249,19 +273,203 @@ pub fn model(input: &str) -> Result<PathBuf> {
                 .and_then(|s| s.parse::<u64>().ok())
         })
     };
-    let digest = (input == DEFAULT_MODEL).then_some(DEFAULT_MODEL_SHA256);
-    if is_cached(&path, expected, digest) {
+    // A failed completion-record hash must not fall back to trusting HEAD's size.
+    // A legacy cache has no record yet; migrate it after the old size check succeeds.
+    if (digest.is_some() || !sidecar(&path, ".complete.json").exists())
+        && is_cached(&path, expected, digest)
+    {
+        if digest.is_none() {
+            let mut hasher = Sha256::new();
+            std::io::copy(&mut fs::File::open(&path)?, &mut hasher)?;
+            write_completed(input, &path, hex(&hasher.finalize()))?;
+        }
         return Ok(path);
     }
-    eprintln!("Downloading model: {input}");
-    let response = agent.get(input).call().context("model download failed")?;
-    let expected = expected.or_else(|| {
-        response
-            .header("content-length")
-            .and_then(|s| s.parse().ok())
-    });
-    download(response.into_reader(), &path, expected, digest)?;
+    download_model(&agent, input, &path, expected, digest)?;
     Ok(path)
+}
+
+fn sidecar(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(suffix);
+    PathBuf::from(name)
+}
+
+#[derive(Serialize, Deserialize)]
+struct CompletedRecord {
+    url: String,
+    size: u64,
+    sha256: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct PartialRecord {
+    url: String,
+    validator: Option<String>,
+}
+
+/// Seven days without a write makes a partial stale. Recent partials remain resumable.
+/// The cache lock prevents the sweep from deleting another scribe download's files.
+const PARTIAL_MAX_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+fn sweep_partials(cache: &Path) -> Result<()> {
+    for entry in fs::read_dir(cache)? {
+        let entry = entry?;
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.ends_with(".part")
+            && entry
+                .metadata()?
+                .modified()?
+                .elapsed()
+                .is_ok_and(|age| age > PARTIAL_MAX_AGE)
+        {
+            fs::remove_file(&path)?;
+            let _ = fs::remove_file(sidecar(&path, ".json"));
+        } else if name.ends_with(".part.json") {
+            let part = cache.join(name.trim_end_matches(".json"));
+            if !part.exists() {
+                // read_dir can still yield a sidecar removed with its stale partial above.
+                match fs::remove_file(path) {
+                    Ok(()) => (),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+                    Err(error) => return Err(error.into()),
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn download_model(
+    agent: &ureq::Agent,
+    url: &str,
+    path: &Path,
+    expected: Option<u64>,
+    sha256: Option<&str>,
+) -> Result<()> {
+    let part = sidecar(path, ".part");
+    let record_path = sidecar(&part, ".json");
+    let record = fs::read(&record_path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<PartialRecord>(&bytes).ok())
+        .filter(|record| record.url == url);
+    // If-Range guards against remote replacements when the server supplies a validator.
+    // Without one, range resume assumes the URL's contents remain stable, as with curl -C.
+    // The pinned default's SHA-256 still rejects any mixed or damaged content.
+    let offset = if record.is_some() || sha256.is_some() {
+        fs::metadata(&part).map(|m| m.len()).unwrap_or(0)
+    } else {
+        0
+    };
+    eprintln!("Downloading model: {url}");
+    let mut request = agent.get(url).set("Accept-Encoding", "identity");
+    if offset > 0 {
+        request = request.set("Range", &format!("bytes={offset}-"));
+        if let Some(validator) = record.as_ref().and_then(|r| r.validator.as_deref()) {
+            request = request.set("If-Range", validator);
+        }
+    }
+    let response = match request.call() {
+        // The remote object shrank, or the partial already has all bytes. Start over safely.
+        Err(ureq::Error::Status(416, _)) if offset > 0 => {
+            fs::remove_file(&part)?;
+            let _ = fs::remove_file(&record_path);
+            return download_model(agent, url, path, expected, sha256);
+        }
+        response => response.context("model download failed")?,
+    };
+    let length = response
+        .header("content-length")
+        .and_then(|s| s.parse::<u64>().ok());
+    let (resume, total) = if response.status() == 206 {
+        ensure!(offset > 0, "unexpected partial model response");
+        let (start, end, total) = response
+            .header("content-range")
+            .and_then(parse_content_range)
+            .context("invalid model Content-Range")?;
+        ensure!(
+            start == offset && end + 1 == total && length.is_none_or(|n| n == total - start),
+            "model Content-Range does not match requested range"
+        );
+        ensure!(
+            expected.is_none_or(|n| n == total),
+            "model size changed during resume"
+        );
+        (true, Some(total))
+    } else {
+        ensure!(
+            response.status() == 200,
+            "unexpected model HTTP status {}",
+            response.status()
+        );
+        (false, expected.or(length))
+    };
+    let validator = response
+        .header("etag")
+        .filter(|s| !s.starts_with("W/"))
+        .or_else(|| response.header("last-modified"))
+        .map(str::to_owned);
+    if resume
+        && let (Some(previous), Some(current)) = (
+            record.as_ref().and_then(|r| r.validator.as_deref()),
+            validator.as_deref(),
+        )
+    {
+        ensure!(
+            previous == current,
+            "model validator changed during range resume"
+        );
+    }
+    let validator = validator.or_else(|| {
+        if resume {
+            record.and_then(|r| r.validator)
+        } else {
+            None
+        }
+    });
+    // Clear old bytes before publishing a validator for a replacement response. A kill
+    // between these writes must not associate the old prefix with a new remote object.
+    if !resume {
+        fs::File::create(&part)?.sync_all()?;
+    }
+    fs::write(
+        &record_path,
+        serde_json::to_vec(&PartialRecord {
+            url: url.to_owned(),
+            validator,
+        })?,
+    )?;
+    let result = download(response.into_reader(), path, total, sha256, resume);
+    if result.is_ok() || !part.exists() {
+        let _ = fs::remove_file(record_path);
+    }
+    let actual = result?;
+    if sha256.is_none() {
+        write_completed(url, path, actual)?;
+    }
+    Ok(())
+}
+
+fn write_completed(url: &str, path: &Path, sha256: String) -> Result<()> {
+    let record = CompletedRecord {
+        url: url.to_owned(),
+        size: fs::metadata(path)?.len(),
+        sha256,
+    };
+    fs::write(
+        sidecar(path, ".complete.json"),
+        serde_json::to_vec(&record)?,
+    )?;
+    write_marker(path, &record.sha256);
+    Ok(())
+}
+
+fn parse_content_range(value: &str) -> Option<(u64, u64, u64)> {
+    let (range, total) = value.strip_prefix("bytes ")?.split_once('/')?;
+    let (start, end) = range.split_once('-')?;
+    let (start, end, total) = (start.parse().ok()?, end.parse().ok()?, total.parse().ok()?);
+    (start <= end && end < total).then_some((start, end, total))
 }
 
 /// A cached model is reused when its size matches and, for the default model, its SHA-256.
@@ -322,69 +530,70 @@ fn download(
     path: &Path,
     expected: Option<u64>,
     sha256: Option<&str>,
-) -> Result<()> {
-    // A unique name per download: two processes must not write into the same file.
-    let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-    let part = path.with_file_name(format!(
-        "{}.{}-{nonce}.part",
-        path.file_name()
-            .context("missing cache filename")?
-            .to_string_lossy(),
-        std::process::id()
-    ));
-    let result = (|| {
-        let mut file = fs::File::create(&part)?;
-        let mut hasher = Sha256::new();
-        let mut buffer = [0u8; 64 * 1024];
-        let mut total = 0u64;
-        let mut last_report = 0u64;
-        loop {
-            let count = reader.read(&mut buffer)?;
-            if count == 0 {
-                break;
-            }
-            file.write_all(&buffer[..count])?;
-            hasher.update(&buffer[..count]);
-            total += count as u64;
-            if total - last_report >= 16 * 1024 * 1024 {
-                eprintln!(
-                    "Model: {} MiB{}",
-                    total / (1024 * 1024),
-                    expected
-                        .map(|n| format!(" / {} MiB", n / (1024 * 1024)))
-                        .unwrap_or_default()
-                );
-                last_report = total;
-            }
-        }
-        if let Some(size) = expected {
-            ensure!(
-                total == size,
-                "model download is incomplete: expected {size} bytes, got {total}"
-            );
-        }
-        if total == 0 {
-            bail!("model download is empty");
-        }
-        if let Some(sha256) = sha256 {
-            let actual = hex(&hasher.finalize());
-            ensure!(
-                actual == sha256,
-                "model download has SHA-256 {actual}, expected {sha256}"
-            );
-        }
-        file.sync_all()?;
-        fs::rename(&part, path)?;
-        if let Some(sha256) = sha256 {
-            write_marker(path, sha256);
-        }
-        eprintln!("Model cached: {} ({total} bytes)", path.display());
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(part);
+    resume: bool,
+) -> Result<String> {
+    let part = sidecar(path, ".part");
+    let mut hasher = Sha256::new();
+    let mut total = 0;
+    if resume {
+        total = std::io::copy(&mut fs::File::open(&part)?, &mut hasher)?;
     }
-    result
+    let mut file = fs::File::options()
+        .create(true)
+        .write(true)
+        .truncate(!resume)
+        .append(resume)
+        .open(&part)?;
+    let mut buffer = [0u8; 64 * 1024];
+    let mut last_report = total;
+    loop {
+        // Keep the stable partial on transport failure or premature EOF for the next run.
+        let count = reader.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        file.write_all(&buffer[..count])?;
+        hasher.update(&buffer[..count]);
+        total += count as u64;
+        if expected.is_some_and(|size| total > size) {
+            drop(file);
+            fs::remove_file(&part)?;
+            bail!("model download exceeds expected size");
+        }
+        if total - last_report >= 16 * 1024 * 1024 {
+            eprintln!(
+                "Model: {} MiB{}",
+                total / (1024 * 1024),
+                expected
+                    .map(|n| format!(" / {} MiB", n / (1024 * 1024)))
+                    .unwrap_or_default()
+            );
+            last_report = total;
+        }
+    }
+    if let Some(size) = expected {
+        ensure!(
+            total == size,
+            "model download is incomplete: expected {size} bytes, got {total}"
+        );
+    }
+    ensure!(total > 0, "model download is empty");
+    let actual = hex(&hasher.finalize());
+    if let Some(sha256) = sha256
+        && actual != sha256
+    {
+        drop(file);
+        fs::remove_file(&part)?;
+        bail!("model download has SHA-256 {actual}, expected {sha256}");
+    }
+    file.sync_all()?;
+    drop(file);
+    fs::rename(&part, path)?;
+    if let Some(sha256) = sha256 {
+        write_marker(path, sha256);
+    }
+    eprintln!("Model cached: {} ({total} bytes)", path.display());
+    Ok(actual)
 }
 
 fn executable_on_path(name: &str) -> bool {
@@ -667,6 +876,367 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         dir
     }
+    // A finite server script records real requests and never waits indefinitely on a failure.
+    fn server(responses: Vec<&'static str>) -> (String, std::thread::JoinHandle<Vec<String>>) {
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/model.gguf", listener.local_addr().unwrap());
+        listener.set_nonblocking(true).unwrap();
+        let thread = std::thread::spawn(move || {
+            let mut requests = Vec::new();
+            for response in responses {
+                let deadline = std::time::Instant::now() + Duration::from_secs(10);
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            if std::time::Instant::now() > deadline {
+                                return requests;
+                            }
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        Err(error) => panic!("{error}"),
+                    }
+                };
+                // macOS inherits the listener's nonblocking mode on accepted sockets.
+                stream.set_nonblocking(false).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    let mut byte = [0];
+                    if stream.read(&mut byte).unwrap() == 0 {
+                        break;
+                    }
+                    request.push(byte[0]);
+                }
+                requests.push(String::from_utf8(request).unwrap());
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+            requests
+        });
+        (url, thread)
+    }
+
+    #[test]
+    fn interrupted_model_resumes_on_the_next_run() {
+        let dir = temp_dir("http-resume");
+        let (url, server) = server(vec![
+            "HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nContent-Length: 11\r\nETag: \"v1\"\r\nConnection: close\r\n\r\nmodel",
+            "HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\n",
+            "HTTP/1.1 206 Partial Content\r\nContent-Length: 6\r\nContent-Range: bytes 5-10/11\r\nETag: \"v1\"\r\nConnection: close\r\n\r\n bytes",
+        ]);
+        assert!(model_in_cache(&url, &dir).is_err());
+        let partials: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".part"))
+            .collect();
+        assert_eq!(partials.len(), 1, "one resumable partial remains");
+        assert!(
+            partials[0]
+                .file_name()
+                .to_string_lossy()
+                .ends_with("model.gguf.part")
+        );
+        assert_eq!(fs::read(partials[0].path()).unwrap(), b"model");
+        let path = model_in_cache(&url, &dir).unwrap();
+        assert_eq!(fs::read(path).unwrap(), b"model bytes");
+        let requests = server.join().unwrap();
+        assert!(
+            requests
+                .last()
+                .unwrap()
+                .to_ascii_lowercase()
+                .contains("range: bytes=5-")
+        );
+        assert!(
+            requests
+                .last()
+                .unwrap()
+                .to_ascii_lowercase()
+                .contains("if-range: \"v1\"")
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn interrupted_model_resumes_without_a_server_validator() {
+        let dir = temp_dir("http-resume-no-validator");
+        let (url, server) = server(vec![
+            "HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\nmodel",
+            "HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            "HTTP/1.1 206 Partial Content\r\nContent-Length: 6\r\nContent-Range: bytes 5-10/11\r\nConnection: close\r\n\r\n bytes",
+        ]);
+        assert!(model_in_cache(&url, &dir).is_err());
+        let result = model_in_cache(&url, &dir);
+        let requests = server.join().unwrap();
+        let path = result.unwrap_or_else(|error| panic!("{error:#}; requests: {requests:#?}"));
+        assert_eq!(fs::read(path).unwrap(), b"model bytes");
+        assert!(
+            requests
+                .last()
+                .unwrap()
+                .to_ascii_lowercase()
+                .contains("range: bytes=5-")
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn a_server_ignoring_range_replaces_the_partial_instead_of_appending() {
+        let dir = temp_dir("http-range-ignored");
+        let (url, server) = server(vec![
+            "HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nContent-Length: 11\r\nETag: \"v1\"\r\nConnection: close\r\n\r\nmodel",
+            "HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nContent-Length: 11\r\nETag: \"v2\"\r\nConnection: close\r\n\r\nother bytes",
+        ]);
+        assert!(model_in_cache(&url, &dir).is_err());
+        let path = model_in_cache(&url, &dir).unwrap();
+        assert_eq!(fs::read(path).unwrap(), b"other bytes");
+        assert!(
+            server
+                .join()
+                .unwrap()
+                .last()
+                .unwrap()
+                .to_ascii_lowercase()
+                .contains("range: bytes=5-")
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn invalid_content_range_cannot_publish_a_model() {
+        let dir = temp_dir("http-invalid-range");
+        let (url, server) = server(vec![
+            "HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nContent-Length: 11\r\nETag: \"v1\"\r\nConnection: close\r\n\r\nmodel",
+            "HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\n",
+            "HTTP/1.1 206 Partial Content\r\nContent-Length: 6\r\nContent-Range: bytes 4-9/11\r\nConnection: close\r\n\r\n bytes",
+        ]);
+        assert!(model_in_cache(&url, &dir).is_err());
+        let error = model_in_cache(&url, &dir).unwrap_err();
+        assert!(error.to_string().contains("Content-Range"), "{error}");
+        server.join().unwrap();
+        let partial = fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .find(|e| e.file_name().to_string_lossy().ends_with(".part"))
+            .unwrap();
+        assert_eq!(fs::read(partial.path()).unwrap(), b"model");
+        assert!(
+            !fs::read_dir(&dir)
+                .unwrap()
+                .flatten()
+                .any(|e| e.path().extension().is_some_and(|s| s == "gguf"))
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn unsatisfiable_range_restarts_the_download() {
+        let dir = temp_dir("http-range-416");
+        let (url, server) = server(vec![
+            "HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nContent-Length: 11\r\nETag: \"v1\"\r\nConnection: close\r\n\r\nmodel",
+            "HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\n",
+            "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\nmodel bytes",
+        ]);
+        assert!(model_in_cache(&url, &dir).is_err());
+        let path = model_in_cache(&url, &dir).unwrap();
+        assert_eq!(fs::read(path).unwrap(), b"model bytes");
+        let requests = server.join().unwrap();
+        assert!(requests[3].to_ascii_lowercase().contains("range: bytes=5-"));
+        assert!(!requests[4].to_ascii_lowercase().contains("range:"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn simultaneous_model_requests_publish_one_completed_download() {
+        let dir = temp_dir("http-lock");
+        let (url, server) = server(vec![
+            "HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\nmodel bytes",
+        ]);
+        let paths = std::thread::scope(|scope| {
+            let a = scope.spawn(|| model_in_cache(&url, &dir).unwrap());
+            let b = scope.spawn(|| model_in_cache(&url, &dir).unwrap());
+            (a.join().unwrap(), b.join().unwrap())
+        });
+        assert_eq!(paths.0, paths.1);
+        assert_eq!(fs::read(paths.0).unwrap(), b"model bytes");
+        assert_eq!(server.join().unwrap().len(), 2, "only one HEAD and one GET");
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn a_damaged_completed_model_is_downloaded_again_not_trusted_by_size() {
+        let dir = temp_dir("http-damaged-cache");
+        let (url, server) = server(vec![
+            "HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\nmodel bytes",
+            "HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\nmodel bytes",
+        ]);
+        let path = model_in_cache(&url, &dir).unwrap();
+        let mtime = fs::metadata(&path).unwrap().modified().unwrap();
+        fs::write(&path, b"wrong bytes").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(mtime + Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(model_in_cache(&url, &dir).unwrap(), path);
+        let requests = server.join().unwrap();
+        assert_eq!(fs::read(path).unwrap(), b"model bytes");
+        assert_eq!(
+            requests.len(),
+            4,
+            "a hash failure must fetch, not trust HEAD's size"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn legacy_custom_cache_gets_a_completion_record_for_offline_reuse() {
+        let dir = temp_dir("http-legacy-cache");
+        let (url, server) = server(vec![
+            "HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\nmodel bytes",
+            "HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\n",
+        ]);
+        let path = model_in_cache(&url, &dir).unwrap();
+        fs::remove_file(sidecar(&path, ".complete.json")).unwrap();
+        assert_eq!(model_in_cache(&url, &dir).unwrap(), path);
+        assert_eq!(
+            server.join().unwrap().len(),
+            3,
+            "migration uses HEAD, not another download"
+        );
+        assert_eq!(model_in_cache(&url, &dir).unwrap(), path);
+        assert_eq!(fs::read(path).unwrap(), b"model bytes");
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn completed_custom_model_is_reused_offline_without_head() {
+        let dir = temp_dir("http-offline");
+        let (url, server) = server(vec![
+            "HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\nmodel bytes",
+        ]);
+        let path = model_in_cache(&url, &dir).unwrap();
+        assert_eq!(server.join().unwrap().len(), 2);
+        assert_eq!(model_in_cache(&url, &dir).unwrap(), path);
+        assert_eq!(fs::read(path).unwrap(), b"model bytes");
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn proxy_client_child() {
+        let Ok(cache) = std::env::var("SCRIBE_PROXY_TEST_CACHE") else {
+            return;
+        };
+        let url = std::env::var("SCRIBE_PROXY_TEST_URL").unwrap();
+        assert!(model_in_cache(&url, Path::new(&cache)).unwrap().is_file());
+        if std::env::var_os("SCRIBE_PROXY_TEST_API").is_some() {
+            match x_media("https://x.com/example/status/1") {
+                Err(XError::Fallback(error)) => {
+                    assert!(error.to_string().contains("invalid X API JSON"), "{error}")
+                }
+                _ => panic!("expected the TLS server's HTML, not an API response"),
+            }
+        }
+    }
+
+    fn proxy_child(cache: &Path, proxy: &str, url: &str) -> Command {
+        let mut child = Command::new(std::env::current_exe().unwrap());
+        child
+            .args(["--exact", "fetch::tests::proxy_client_child", "--nocapture"])
+            .env("SCRIBE_PROXY_TEST_CACHE", cache)
+            .env("SCRIBE_PROXY_TEST_URL", url)
+            .env("HTTPS_PROXY", proxy);
+        // Isolate environment changes in a subprocess, not Rust's parallel test process.
+        for name in [
+            "ALL_PROXY",
+            "all_proxy",
+            "https_proxy",
+            "HTTP_PROXY",
+            "http_proxy",
+            "NO_PROXY",
+            "no_proxy",
+        ] {
+            child.env_remove(name);
+        }
+        child
+    }
+
+    #[test]
+    fn https_proxy_routes_model_requests_through_loopback_proxy() {
+        let dir = temp_dir("proxy");
+        let (proxy_url, server) = server(vec![
+            "HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\nmodel bytes",
+        ]);
+        let output = proxy_child(
+            &dir,
+            proxy_url.trim_end_matches("/model.gguf"),
+            "http://model.invalid/model.gguf",
+        )
+        .output()
+        .unwrap();
+        let requests = server.join().unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(requests.len(), 2);
+        assert!(requests[1].starts_with("GET http://model.invalid/model.gguf HTTP/1.1"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn model_start_sweeps_stale_partials_and_preserves_recent_partials() {
+        let dir = temp_dir("stale-parts");
+        let stale = dir.join("old.gguf.123-456.part");
+        fs::write(&stale, b"old orphan").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&stale)
+            .unwrap()
+            .set_modified(SystemTime::now() - Duration::from_secs(8 * 24 * 60 * 60))
+            .unwrap();
+        let stale_stable = dir.join("stale.gguf.part");
+        fs::write(&stale_stable, b"stale partial").unwrap();
+        fs::write(sidecar(&stale_stable, ".json"), b"{}").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&stale_stable)
+            .unwrap()
+            .set_modified(SystemTime::now() - Duration::from_secs(8 * 24 * 60 * 60))
+            .unwrap();
+        let recent = dir.join("recent.gguf.part");
+        fs::write(&recent, b"resumable").unwrap();
+        let orphan = dir.join("missing.gguf.part.json");
+        fs::write(&orphan, b"{}").unwrap();
+        let (url, server) = server(vec![
+            "HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\nmodel bytes",
+        ]);
+        model_in_cache(&url, &dir).unwrap();
+        server.join().unwrap();
+        assert!(
+            !stale.exists(),
+            "the startup sweep removes stale legacy partials"
+        );
+        assert!(!orphan.exists(), "orphan resume records are removed");
+        assert!(!stale_stable.exists());
+        assert!(!sidecar(&stale_stable, ".json").exists());
+        assert_eq!(fs::read(recent).unwrap(), b"resumable");
+        fs::remove_dir_all(dir).unwrap();
+    }
     #[test]
     fn local_source_id_follows_content_not_path() {
         let dir = temp_dir("file-id");
@@ -701,10 +1271,15 @@ mod tests {
         let path = dir.join("model.gguf");
         let data = b"model bytes";
         let digest = sha256_hex(data);
-        assert!(download(&data[..5], &path, Some(11), None).is_err());
-        assert!(download(&data[..], &path, Some(11), Some(&"0".repeat(64))).is_err());
+        assert!(download(&data[..5], &path, Some(11), None, false).is_err());
+        assert_eq!(fs::read(sidecar(&path, ".part")).unwrap(), &data[..5]);
+        assert!(download(&data[..], &path, Some(11), Some(&"0".repeat(64)), false).is_err());
         assert!(!path.exists());
-        download(&data[..], &path, Some(11), Some(&digest)).unwrap();
+        assert!(
+            !sidecar(&path, ".part").exists(),
+            "a bad hash cannot be resumed"
+        );
+        download(&data[..], &path, Some(11), Some(&digest), false).unwrap();
         assert_eq!(fs::read(&path).unwrap(), data);
         assert!(
             fs::read_dir(&dir).unwrap().all(|entry| !entry
@@ -784,7 +1359,7 @@ mod tests {
         let path = dir.join("model.gguf");
         let data = b"model bytes";
         let digest = sha256_hex(data);
-        download(&data[..], &path, Some(11), Some(&digest)).unwrap();
+        download(&data[..], &path, Some(11), Some(&digest), false).unwrap();
         let info = fs::metadata(&path).unwrap();
         assert_eq!(
             fs::read_to_string(marker_path(&path)).ok(),
