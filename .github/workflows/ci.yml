@@ -1,5 +1,26 @@
 name: CI
-on: [push, pull_request]
+# Run only when code, build inputs, tests, workflows or the skill version can change the result.
+on:
+  push:
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/**"
+      - "skills/scribe/SKILL.md"
+  pull_request:
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/**"
+      - "skills/scribe/SKILL.md"
+# A newer push to the same branch cancels the run still going for an older one.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 env:
   # Same CPU flags as the release build.
   TRANSCRIBE_CMAKE_ARGS: -DGGML_NATIVE=OFF
