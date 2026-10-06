@@ -429,7 +429,13 @@ fn x_metadata(post: &serde_json::Value, raw: &serde_json::Value) -> Result<Metad
     Ok(Metadata {
         title: format!(
             "{author} (@{handle}): {}",
-            text.chars().take(80).collect::<String>()
+            // Post text often has blank lines; titles land in YAML and headings, so keep one line.
+            text.split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .chars()
+                .take(80)
+                .collect::<String>()
         ),
         source: url.to_owned(),
         uploader: Some(handle.to_owned()),
@@ -510,5 +516,16 @@ mod tests {
         };
         assert_eq!(quoted_posts.len(), 1);
         assert_eq!(quoted_posts[0].text, "Quoted");
+    }
+    #[test]
+    fn x_title_is_one_line_with_single_spaces() {
+        let raw: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/x.json")).unwrap();
+        assert!(raw["posts"][0]["text"].as_str().unwrap().contains("\n\n"));
+        let meta = x_metadata(&raw["posts"][0], &raw).unwrap();
+        assert_eq!(
+            meta.title,
+            "Pi (@pidotdev): Welcome to our Monday Meditations! 🌞 Today @badlogicgames and @mitsuhiko are tal"
+        );
     }
 }
