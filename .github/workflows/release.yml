@@ -54,7 +54,32 @@ jobs:
         if: runner.os == 'Linux'
         run: scripts/portable-check.sh target/release/scribe '${{ matrix.platform }}'
       - run: cargo build --release --locked
-        if: runner.os != 'Linux'
+        if: runner.os == 'macOS'
+      - name: Build Windows binary with static CRT
+        if: runner.os == 'Windows'
+        env:
+          RUSTFLAGS: -C target-feature=+crt-static
+          TRANSCRIBE_CMAKE_ARGS: -DGGML_NATIVE=OFF -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+        run: cargo build --release --locked
+      - name: Check Windows runtime dependencies
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $installation = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or !$installation) { throw "Visual Studio C++ tools not found" }
+          $dumpbin = Get-ChildItem "$installation\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          if (!$dumpbin) { throw "dumpbin.exe not found" }
+          $dependencies = & $dumpbin.FullName /dependents target/release/scribe.exe
+          if ($LASTEXITCODE -ne 0) { throw "dumpbin /dependents failed" }
+          $dependencies | Write-Output
+          # Reject the VC runtime and Universal CRT DLLs, including versioned helpers.
+          if ($dependencies -match '(?i)\b(?:VCRUNTIME140[\w-]*|MSVCP140[\w-]*|api-ms-win-crt-[\w-]+|ucrtbase)\.dll\b') {
+            throw "scribe.exe depends on a separately installed C/C++ runtime"
+          }
+          & ./target/release/scribe.exe --version
+          if ($LASTEXITCODE -ne 0) { throw "scribe.exe --version failed" }
       - name: Package (macOS, Linux)
         if: runner.os != 'Windows'
         shell: bash
