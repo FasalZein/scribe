@@ -274,9 +274,10 @@ fn media_download_args(command: &mut Command, workspace: &Path, info_path: &Path
             "--abort-on-unavailable-fragments",
             // Keep the best audio-only format: a lower audio bitrate needs a WER comparison
             // first (ADR 0005). Without one, take the smallest format that carries audio, so a
-            // site with only progressive video does not download its largest file.
+            // site with only progressive video does not download its largest file. `!=?` keeps
+            // formats whose audio codec is unknown, as for plain HLS streams.
             "-f",
-            "bestaudio/worst[acodec!=none]",
+            "bestaudio/worst[acodec!=?none]",
             // Print the final media path: a user config can add subtitles or thumbnails.
             "--print",
             "after_move:filepath",
@@ -1401,7 +1402,7 @@ mod tests {
         );
         assert!(
             args.windows(2)
-                .any(|pair| pair == ["-f", "bestaudio/worst[acodec!=none]"]),
+                .any(|pair| pair == ["-f", "bestaudio/worst[acodec!=?none]"]),
             "{args:?}"
         );
         assert!(
