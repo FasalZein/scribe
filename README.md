@@ -76,7 +76,7 @@ scribe [OPTIONS] <INPUT>...
     --force            Redo an existing transcript; keeps lessons.md
 -m, --model PATH|URL   GGUF model path or URL
 -l, --language CODE    Language hint passed to the engine
-    --chunk-secs N     Positive target chunk length in seconds (default 60)
+    --chunk-secs N     Positive target chunk length in seconds (default 30)
     --keep-media       Keep downloaded media and decoded audio
     --backend NAME     auto|cpu|metal|vulkan|cuda (default auto)
 -h, --help
@@ -191,6 +191,8 @@ overlap. Shorter target lengths search only within that chunk. The engine loads
 one model per run and uses its batch API for chunks, reusing the model for later
 inputs. Timestamps use engine segments when available, or chunk offsets otherwise.
 Audio and batch state remain in memory, so very long recordings need more RAM.
+The default target is 30 s because transcribe-cpp's Parakeet drops whole sentences
+from chunks near 60 s (see `docs/adr/0003-30-second-chunks.md`).
 
 `engine_secs` measures chunk selection and transcription, not model loading,
 downloading, decoding, or output writing. `duration_secs` measures decoded audio.
@@ -211,3 +213,10 @@ metadata, Sources/Chapters rendering, and splitting into parts (chapters,
 oversized chapters, word limit, short and empty transcripts, no lost segments). Trimmed real API and yt-dlp JSON lives
 under `tests/fixtures/`; tests also construct small edge cases. CI builds and tests on macOS (Metal) and Ubuntu (CPU).
 The unit tests do not require a model or external media tools.
+One ignored test guards against lost speech in long chunks. It needs a model and
+the Pi durable-sessions talk (27:26), and runs in about 3 s on Metal:
+
+```sh
+SCRIBE_REGRESSION_MODEL=/path/to/parakeet-tdt-0.6b-v3-Q8_0.gguf \
+SCRIBE_REGRESSION_MEDIA=/path/to/video.mp4 cargo test --release -- --ignored
+```

@@ -25,7 +25,9 @@ pub struct Cli {
     #[arg(short, long, value_name = "CODE")]
     pub language: Option<String>,
     /// Target chunk length in seconds
-    #[arg(long, default_value = "60", value_name = "N")]
+    // transcribe-cpp Parakeet drops whole sentences from chunks near 60 s;
+    // 30 s had the lowest word error rate in docs/adr/0003-30-second-chunks.md.
+    #[arg(long, default_value = "30", value_name = "N")]
     pub chunk_secs: NonZeroU32,
     /// Keep downloaded media and decoded 16 kHz mono f32 audio
     #[arg(long)]

@@ -82,3 +82,39 @@ impl Engine {
         Ok(segments)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    /// Regression for a sentence that transcribe-cpp dropped from a 52.6 s chunk.
+    /// The first 70 s of the source still get that chunk boundary at the old
+    /// 60 s default, so this short slice is enough to reproduce the loss.
+    #[test]
+    #[ignore = "needs a Parakeet GGUF and the Pi durable-sessions talk; set SCRIBE_REGRESSION_MODEL and SCRIBE_REGRESSION_MEDIA"]
+    fn default_chunks_keep_the_sentence_long_chunks_dropped() {
+        let (Ok(model), Ok(media)) = (
+            std::env::var("SCRIBE_REGRESSION_MODEL"),
+            std::env::var("SCRIBE_REGRESSION_MEDIA"),
+        ) else {
+            eprintln!("skip: SCRIBE_REGRESSION_MODEL or SCRIBE_REGRESSION_MEDIA is not set");
+            return;
+        };
+        let cli = Cli::parse_from(["scribe", &media, "--model", &model]);
+        let (pcm, _) = crate::audio::decode(media.as_ref()).unwrap();
+        let pcm = &pcm[..70 * SAMPLE_RATE];
+        let mut engine = Engine::load(model.as_ref(), &cli).unwrap();
+        let text = engine
+            .transcribe(pcm, cli.chunk_secs)
+            .unwrap()
+            .into_iter()
+            .map(|segment| segment.text)
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            text.contains("fits snugly into memory"),
+            "sentence near 0:25 is missing: {text}"
+        );
+    }
+}
