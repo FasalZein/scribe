@@ -22,8 +22,24 @@ _Avoid_: captions, subtitles
 The entry file of a transcript that lists its metadata, its source links and its parts, with size estimates for each part.
 _Avoid_: table of contents, manifest
 
+**Chunk**:
+One slice of a source's audio, at most 30 s, that the speech engine transcribes on its own. Chunks are cut at a quiet point and do not overlap.
+_Avoid_: part, segment, window
+
+**Hard cut**:
+A chunk cut made at the length limit because no quiet point was found, so it can split a word.
+_Avoid_: forced split, blind cut
+
+**Known term**:
+A name, handle or spelling taken from the source's own metadata (post text, title, uploader, description), used to spell misheard words right in lessons.
+_Avoid_: vocabulary, hotword, glossary entry
+
+**Low-confidence passage**:
+A span of a transcript that the speech engine scored as doubtful, so its words need checking before a lesson quotes them.
+_Avoid_: uncertain span, error, flag
+
 **Part**:
-One contiguous slice of a transcript, cut at a chapter or at a size limit, small enough to read in one step.
+One contiguous slice of a transcript, cut at a chapter or at a sentence end near a size limit, small enough to read in one step.
 _Avoid_: chunk (a chunk is the audio slice the speech engine processes), section, page
 
 ### Knowledge
@@ -33,7 +49,7 @@ The act of reading a transcript and writing down its lessons. One helper does th
 _Avoid_: distillation, digest, summary, mining
 
 **Lesson**:
-One reusable piece of knowledge from a source, restated so it makes sense without the transcript. It names who said it, its kind (claim, mechanism, practice or trade-off) and the timestamp in the source.
+One reusable piece of knowledge from a source, restated so it makes sense without the transcript. It names who said it, its kind (claim, explanation, procedure, heuristic, trade-off or example) and the timestamp in the source. A lesson can come from any field, from engineering to cooking.
 _Avoid_: insight, takeaway, finding, distillate
 
 **Focus**:

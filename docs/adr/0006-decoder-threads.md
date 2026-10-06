@@ -32,4 +32,4 @@ Measurement: 27:26 talk, Parakeet TDT v3 Q8_0, M4 Pro (10 P + 4 E cores), Metal,
 ## Consequences
 
 - Revisit when transcribe-cpp decodes several utterances in parallel or stores the decoder weights in less than F32; both change the per-step cost.
-- Two sessions on one model (decode one batch on the CPU while the next encodes on the GPU) could win back the idle cost. It is not implemented.
+- Two sessions on one model (decode one batch on the CPU while the next encodes on the GPU) could win back the idle cost. It is not implemented, and transcribe-cpp 0.3.1 forbids it (ADR 0014).
