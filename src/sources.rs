@@ -2,15 +2,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub fn is_x_post(input: &str) -> bool {
-    let Some(rest) = input
+    x_status_id(input).is_some()
+}
+/// The status ID of an X post URL, or None when the input is not an X post URL.
+pub fn x_status_id(input: &str) -> Option<&str> {
+    let rest = input
         .strip_prefix("https://")
-        .or_else(|| input.strip_prefix("http://"))
-    else {
-        return false;
-    };
-    let Some((host, path)) = rest.split_once('/') else {
-        return false;
-    };
+        .or_else(|| input.strip_prefix("http://"))?;
+    let (host, path) = rest.split_once('/')?;
     let host = host.to_ascii_lowercase();
     let host = host
         .strip_prefix("www.")
@@ -22,7 +21,7 @@ pub fn is_x_post(input: &str) -> bool {
         .unwrap_or("")
         .trim_end_matches('/');
     let parts: Vec<_> = path.split('/').collect();
-    matches!(host, "x.com" | "twitter.com")
+    let post = matches!(host, "x.com" | "twitter.com")
         && parts.len() == 3
         && !parts[0].is_empty()
         && parts[0]
@@ -30,7 +29,8 @@ pub fn is_x_post(input: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == b'_')
         && parts[1] == "status"
         && !parts[2].is_empty()
-        && parts[2].bytes().all(|c| c.is_ascii_digit())
+        && parts[2].bytes().all(|c| c.is_ascii_digit());
+    post.then(|| parts[2])
 }
 
 #[derive(Serialize, Deserialize)]
@@ -274,9 +274,12 @@ mod tests {
     #[test]
     fn detects_only_status_urls_on_x_hosts() {
         for host in ["x.com", "twitter.com", "www.x.com", "mobile.twitter.com"] {
-            assert!(is_x_post(&format!(
-                "https://{host}/pidotdev/status/2107033061905104941?s=20"
-            )));
+            assert_eq!(
+                x_status_id(&format!(
+                    "https://{host}/pidotdev/status/2107033061905104941?s=20"
+                )),
+                Some("2107033061905104941")
+            );
         }
         for url in [
             "https://x.com.evil/a/status/123",

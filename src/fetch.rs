@@ -2,15 +2,30 @@ use crate::cli::DEFAULT_MODEL;
 use crate::sources::{Chapter, Sources};
 use anyhow::{Context, Result, bail, ensure};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::{
     fs,
-    io::{Read, Write},
+    io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     process::{Command, Output},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 const DEFAULT_MODEL_BYTES: u64 = 739_508_576;
+/// SHA-256 of the default model at the pinned revision in `DEFAULT_MODEL`.
+const DEFAULT_MODEL_SHA256: &str =
+    "5859f77944efcd8eafa23a6350731960b2b55b2203df51f319665c807d802cc7";
+/// yt-dlp gives up on a socket that makes no progress for this many seconds.
+const SOCKET_TIMEOUT_SECS: &str = "30";
+/// A local source ID hashes this many bytes from each end of the file.
+const ID_SAMPLE_BYTES: u64 = 1024 * 1024;
+
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    hex(&Sha256::digest(bytes))
+}
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
 
 pub fn command_output(command: &mut Command, tool: &str) -> Result<Output> {
     let output = command
@@ -47,6 +62,8 @@ impl Drop for Workspace {
 
 #[derive(Serialize)]
 pub struct Metadata {
+    /// The source ID: stable across runs, titles and dates (see docs/adr/0004-source-id.md).
+    pub id: String,
     pub title: String,
     pub source: String,
     pub uploader: Option<String>,
@@ -83,9 +100,10 @@ impl Media {
 
 pub fn media(input: &str) -> Result<(Metadata, Pending)> {
     if !is_url(input) {
-        let path =
-            fs::canonicalize(input).with_context(|| format!("cannot open local media {input}"))?;
-        let info = fs::metadata(&path)?;
+        // `absolute` avoids the `\\?\` prefix that `canonicalize` adds on Windows.
+        let path = std::path::absolute(input)?;
+        let info =
+            fs::metadata(&path).with_context(|| format!("cannot open local media {input}"))?;
         ensure!(info.is_file(), "local input is not a file: {input}");
         let title = path
             .file_stem()
@@ -94,11 +112,12 @@ pub fn media(input: &str) -> Result<(Metadata, Pending)> {
             .into_owned();
         return Ok((
             Metadata {
+                id: file_id(&path, info.len())?,
                 title,
                 source: path.to_string_lossy().into_owned(),
                 uploader: None,
                 upload_date: None,
-                duration: None,
+                duration: probe_duration(&path),
                 file_size: Some(info.len()),
                 sources: Sources::Local {
                     path: path.to_string_lossy().into_owned(),
@@ -127,6 +146,7 @@ pub fn media(input: &str) -> Result<(Metadata, Pending)> {
         serde_json::from_slice(&output.stdout).context("invalid yt-dlp metadata")?;
     let text = |key: &str| raw[key].as_str().map(str::to_owned);
     let meta = Metadata {
+        id: yt_dlp_id(input, &raw)?,
         title: text("title").context("yt-dlp metadata has no title")?,
         source: input.to_owned(),
         uploader: text("uploader"),
@@ -160,35 +180,38 @@ pub fn resolve(media: Pending, workspace: &Path) -> Result<Media> {
         Pending::YtDlp(input) => input,
     };
     eprintln!("Downloading media: {input}");
-    command_output(
+    let output_path = command_output(
         yt_dlp()?
             .args([
                 "--no-playlist",
                 "--no-progress",
                 "-f",
                 "bestaudio/best",
+                // Print the final media path: a user config can add subtitles or thumbnails.
+                "--print",
+                "after_move:filepath",
                 "-o",
             ])
             .arg(workspace.join("media.%(ext)s"))
             .args(["--", &input]),
         "yt-dlp",
     )?;
-    let files: Vec<_> = fs::read_dir(workspace)?.collect::<std::io::Result<Vec<_>>>()?;
-    let path = files
-        .into_iter()
-        .map(|entry| entry.path())
-        .find(|p| {
-            p.is_file()
-                && p.extension()
-                    .is_some_and(|ext| ext != "part" && ext != "ytdl")
-        })
+    let path = String::from_utf8_lossy(&output_path.stdout)
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(PathBuf::from)
+        .filter(|path| path.is_file())
         .context("yt-dlp did not produce a media file")?;
     Ok(Media::File(path))
 }
 
 pub fn model(input: &str) -> Result<PathBuf> {
     if !is_url(input) {
-        return fs::canonicalize(input).with_context(|| format!("cannot open model {input}"));
+        let path = std::path::absolute(input)?;
+        fs::metadata(&path).with_context(|| format!("cannot open model {input}"))?;
+        return Ok(path);
     }
     let cache = dirs::cache_dir()
         .context("platform cache directory is unavailable")?
@@ -207,10 +230,8 @@ pub fn model(input: &str) -> Result<PathBuf> {
     let path = if input == DEFAULT_MODEL {
         cache.join(name)
     } else {
-        use std::hash::{Hash, Hasher};
-        let mut hash = std::collections::hash_map::DefaultHasher::new();
-        input.hash(&mut hash);
-        cache.join(format!("{:016x}-{name}", hash.finish()))
+        // A fixed hash keeps the cache name across Rust releases, unlike DefaultHasher.
+        cache.join(format!("{}-{name}", &sha256_hex(input.as_bytes())[..16]))
     };
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(30))
@@ -236,19 +257,29 @@ pub fn model(input: &str) -> Result<PathBuf> {
             .header("content-length")
             .and_then(|s| s.parse().ok())
     });
-    download(response.into_reader(), &path, expected)?;
+    let digest = (input == DEFAULT_MODEL).then_some(DEFAULT_MODEL_SHA256);
+    download(response.into_reader(), &path, expected, digest)?;
     Ok(path)
 }
 
-fn download(mut reader: impl Read, path: &Path, expected: Option<u64>) -> Result<()> {
+fn download(
+    mut reader: impl Read,
+    path: &Path,
+    expected: Option<u64>,
+    sha256: Option<&str>,
+) -> Result<()> {
+    // A unique name per download: two processes must not write into the same file.
+    let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
     let part = path.with_file_name(format!(
-        "{}.part",
+        "{}.{}-{nonce}.part",
         path.file_name()
             .context("missing cache filename")?
-            .to_string_lossy()
+            .to_string_lossy(),
+        std::process::id()
     ));
     let result = (|| {
         let mut file = fs::File::create(&part)?;
+        let mut hasher = Sha256::new();
         let mut buffer = [0u8; 64 * 1024];
         let mut total = 0u64;
         let mut last_report = 0u64;
@@ -258,6 +289,7 @@ fn download(mut reader: impl Read, path: &Path, expected: Option<u64>) -> Result
                 break;
             }
             file.write_all(&buffer[..count])?;
+            hasher.update(&buffer[..count]);
             total += count as u64;
             if total - last_report >= 16 * 1024 * 1024 {
                 eprintln!(
@@ -278,6 +310,13 @@ fn download(mut reader: impl Read, path: &Path, expected: Option<u64>) -> Result
         }
         if total == 0 {
             bail!("model download is empty");
+        }
+        if let Some(sha256) = sha256 {
+            let actual = hex(&hasher.finalize());
+            ensure!(
+                actual == sha256,
+                "model download has SHA-256 {actual}, expected {sha256}"
+            );
         }
         file.sync_all()?;
         fs::rename(&part, path)?;
@@ -331,6 +370,7 @@ fn yt_dlp() -> Result<Command> {
     if uvx {
         command.arg("yt-dlp@latest");
     }
+    command.args(["--socket-timeout", SOCKET_TIMEOUT_SECS]);
     // Deno's standard installer does not add its bin directory to every shell's PATH.
     if let Some(home) = dirs::home_dir() {
         let deno = home.join(".deno/bin/deno");
@@ -341,6 +381,52 @@ fn yt_dlp() -> Result<Command> {
         }
     }
     Ok(command)
+}
+
+/// The source ID of a yt-dlp source. An X post keeps its status ID when the X API fails.
+fn yt_dlp_id(input: &str, raw: &serde_json::Value) -> Result<String> {
+    if let Some(status) = crate::sources::x_status_id(input) {
+        return Ok(format!("x:{status}"));
+    }
+    let extractor = raw["extractor_key"]
+        .as_str()
+        .context("yt-dlp metadata has no extractor_key")?;
+    let id = raw["id"].as_str().context("yt-dlp metadata has no id")?;
+    Ok(format!("{}:{id}", extractor.to_lowercase()))
+}
+
+/// The source ID of a local file: its size and a SHA-256 over the first and last MiB. Media
+/// containers keep their headers and index at the ends, so two different recordings with equal
+/// sizes and equal ends do not occur in practice, and a multi-GB file is not read in full.
+fn file_id(path: &Path, size: u64) -> Result<String> {
+    let mut file = fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    hasher.update(size.to_le_bytes());
+    let mut sample = Vec::new();
+    (&mut file).take(ID_SAMPLE_BYTES).read_to_end(&mut sample)?;
+    hasher.update(&sample);
+    sample.clear();
+    file.seek(SeekFrom::Start(size.saturating_sub(ID_SAMPLE_BYTES)))?;
+    file.take(ID_SAMPLE_BYTES).read_to_end(&mut sample)?;
+    hasher.update(&sample);
+    Ok(format!("file:{}", &hex(&hasher.finalize())[..32]))
+}
+
+/// The audio duration a local file reports, for the truncation check. None when unknown.
+fn probe_duration(path: &Path) -> Option<f64> {
+    let output = command_output(
+        Command::new("ffprobe")
+            .args(["-v", "error", "-select_streams", "a:0"])
+            .args(["-show_entries", "stream=duration:format=duration"])
+            .args(["-of", "default=noprint_wrappers=1:nokey=1"])
+            .arg(path),
+        "ffprobe",
+    )
+    .ok()?;
+    // The audio stream duration comes first; containers without one report N/A there.
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| line.trim().parse::<f64>().ok())
 }
 
 enum XError {
@@ -427,6 +513,10 @@ fn x_metadata(post: &serde_json::Value, raw: &serde_json::Value) -> Result<Metad
         }
     }
     Ok(Metadata {
+        id: format!(
+            "x:{}",
+            crate::sources::x_status_id(url).context("X post URL has no status ID")?
+        ),
         title: format!(
             "{author} (@{handle}): {}",
             // Post text often has blank lines; titles land in YAML and headings, so keep one line.
@@ -486,6 +576,58 @@ fn x_date(date: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("scribe-test-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+    #[test]
+    fn local_source_id_follows_content_not_path() {
+        let dir = temp_dir("file-id");
+        let content: Vec<u8> = (0..3 * ID_SAMPLE_BYTES).map(|i| (i % 251) as u8).collect();
+        let (a, b, c) = (dir.join("a.mp4"), dir.join("b.mp4"), dir.join("c.mp4"));
+        fs::write(&a, &content).unwrap();
+        fs::write(&b, &content).unwrap();
+        let mut changed = content.clone();
+        *changed.last_mut().unwrap() ^= 1;
+        fs::write(&c, &changed).unwrap();
+        let id = |p: &Path| file_id(p, fs::metadata(p).unwrap().len()).unwrap();
+        assert_eq!(id(&a), id(&b));
+        assert_ne!(id(&a), id(&c));
+        assert!(id(&a).starts_with("file:"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn yt_dlp_id_uses_extractor_and_id_and_keeps_x_status_ids() {
+        let raw = serde_json::json!({"extractor_key": "Youtube", "id": "UNP03fDSj1U"});
+        assert_eq!(
+            yt_dlp_id("https://www.youtube.com/watch?v=UNP03fDSj1U", &raw).unwrap(),
+            "youtube:UNP03fDSj1U"
+        );
+        assert_eq!(
+            yt_dlp_id("https://x.com/pidotdev/status/2107033061905104941", &raw).unwrap(),
+            "x:2107033061905104941"
+        );
+    }
+    #[test]
+    fn download_checks_size_and_sha256_and_leaves_no_part_file() {
+        let dir = temp_dir("download");
+        let path = dir.join("model.gguf");
+        let data = b"model bytes";
+        let digest = sha256_hex(data);
+        assert!(download(&data[..5], &path, Some(11), None).is_err());
+        assert!(download(&data[..], &path, Some(11), Some(&"0".repeat(64))).is_err());
+        assert!(!path.exists());
+        download(&data[..], &path, Some(11), Some(&digest)).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), data);
+        assert_eq!(
+            fs::read_dir(&dir).unwrap().count(),
+            1,
+            "no .part file is left"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
     #[test]
     fn x_metadata_uses_author_text_and_created_at() {
         let raw: serde_json::Value =
@@ -498,6 +640,7 @@ mod tests {
                 .starts_with("Pi (@pidotdev): Welcome to our Monday Meditations!")
         );
         assert_eq!(meta.duration, Some(1646.416));
+        assert_eq!(meta.id, "x:2107033061905104941");
         assert!(x_date("not a date").is_err());
         assert!(x_date("Mon Feb 30 09:00:03 +0000 2026").is_err());
     }

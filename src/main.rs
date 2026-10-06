@@ -45,7 +45,8 @@ fn process(
         *engine = Some(loaded);
     }
     eprintln!("Decoding: {}", meta.title);
-    let (pcm, bytes) = audio::decode(media.input())?;
+    let network = matches!(media, fetch::Media::Stream(_));
+    let pcm = audio::decode(media.input(), network, meta.duration)?;
     let duration = pcm.len() as f64 / audio::SAMPLE_RATE as f64;
     let start = Instant::now();
     let segments = engine
@@ -54,8 +55,14 @@ fn process(
         .transcribe(&pcm, cli.chunk_secs)?;
     let engine_secs = start.elapsed().as_secs_f64();
     eprintln!("Transcribed {:.1}s of audio in {engine_secs:.2}s", duration);
+    output::clear(&dir)?;
     if cli.keep_media {
-        fs::write(dir.join("audio.f32le"), bytes)?;
+        use std::io::Write;
+        let mut audio = std::io::BufWriter::new(fs::File::create(dir.join("audio.f32le"))?);
+        for sample in &pcm {
+            audio.write_all(&sample.to_le_bytes())?;
+        }
+        audio.flush()?;
         if fetch::is_url(input)
             && let fetch::Media::File(media) = &media
         {

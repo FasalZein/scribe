@@ -7,8 +7,8 @@ pub const TOKENS_PER_WORD: f64 = 1.33;
 pub struct Part<'a> {
     pub segments: &'a [Segment],
     pub chapter: Option<&'a Chapter>,
-    /// Letter of this piece when a chapter is longer than one part; None otherwise.
-    pub piece: Option<char>,
+    /// Number of this piece, from 1, when a chapter is longer than one part; None otherwise.
+    pub piece: Option<usize>,
 }
 impl Part<'_> {
     pub fn words(&self) -> usize {
@@ -61,7 +61,7 @@ pub fn split<'a>(segments: &'a [Segment], chapters: &'a [Chapter]) -> Vec<Part<'
             piece: None,
         });
     }
-    // Letter the pieces of each chapter that needed more than one part.
+    // Number the pieces of each chapter that needed more than one part.
     let same = |a: &Part, b: &Part| match (a.chapter, b.chapter) {
         (Some(a), Some(b)) => std::ptr::eq(a, b),
         _ => false,
@@ -71,7 +71,7 @@ pub fn split<'a>(segments: &'a [Segment], chapters: &'a [Chapter]) -> Vec<Part<'
         if i == parts.len() || !same(&parts[first], &parts[i]) {
             if i - first > 1 {
                 for (n, part) in parts[first..i].iter_mut().enumerate() {
-                    part.piece = char::from_u32('a' as u32 + n as u32);
+                    part.piece = Some(n + 1);
                 }
             }
             first = i;
@@ -147,7 +147,7 @@ mod tests {
         );
         assert_eq!(
             parts.iter().map(|p| p.piece).collect::<Vec<_>>(),
-            [None, Some('a'), Some('b'), None]
+            [None, Some(1), Some(2), None]
         );
         let actual: Vec<_> = parts.iter().flat_map(|p| p.segments.iter()).collect();
         for (a, b) in actual.iter().zip(&segments) {

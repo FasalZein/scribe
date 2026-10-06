@@ -1,7 +1,8 @@
 use clap::{Parser, ValueEnum};
 use std::{num::NonZeroU32, path::PathBuf};
 
-pub const DEFAULT_MODEL: &str = "https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf/resolve/main/parakeet-tdt-0.6b-v3-Q8_0.gguf";
+/// Pinned to a Hugging Face commit, so the fixed size and SHA-256 in fetch.rs stay valid.
+pub const DEFAULT_MODEL: &str = "https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf/resolve/90f082450fcbacdb54e5900c44ef697c9ea59622/parakeet-tdt-0.6b-v3-Q8_0.gguf";
 
 #[derive(Parser)]
 #[command(
