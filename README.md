@@ -43,7 +43,7 @@ scribe does not need browse-x. It calls the same API (`https://x.pcstyle.dev/api
 | Platform | Prebuilt binary | Backend | Measured speed |
 |---|---|---|---|
 | macOS, Apple Silicon | `aarch64-apple-darwin` | Metal | 27:26 video in 13.7 s (M4 Pro) |
-| Linux x86_64 (glibc 2.35+) | `x86_64-unknown-linux-gnu` | CPU | not measured |
+| Linux x86_64 (glibc 2.35+) | `x86_64-unknown-linux-gnu` | CPU | not measured natively; 3:00 clip in 72 s under Rosetta emulation |
 | Linux arm64 (glibc 2.35+) | `aarch64-unknown-linux-gnu` | CPU | 27:26 video in 135.6 s (OrbStack VM on the M4 Pro, 6 CPUs) |
 | Windows x86_64 | `x86_64-pc-windows-msvc`, when its release build succeeds | CPU | not tested |
 | macOS Intel, other | none; build from source | CPU | not tested |
