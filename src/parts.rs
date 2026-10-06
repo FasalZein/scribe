@@ -161,6 +161,7 @@ mod tests {
                 start: start + i as f64 * step,
                 end: start + (i + 1) as f64 * step,
                 text: text.to_owned(),
+                confidence: None,
             })
             .collect()
     }

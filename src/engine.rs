@@ -2,7 +2,8 @@ use crate::{audio::SAMPLE_RATE, cli::Cli};
 use anyhow::{Context, Result};
 use std::ops::Range;
 use transcribe_cpp::{
-    DeviceType, Model, ModelOptions, RunOptions, Session, SessionOptions, TimestampKind, Transcript,
+    DeviceType, Model, ModelOptions, RunOptions, Session, SessionOptions, TimestampKind, Token,
+    Transcript,
 };
 
 /// Chunks per engine batch. transcribe-cpp holds the features and encoder output of a whole
@@ -21,6 +22,9 @@ pub struct Word {
     pub start: f64,
     pub end: f64,
     pub text: String,
+    /// The lowest engine confidence `p` (0 to 1) of the word's tokens, or None when the model
+    /// gives no token scores. Parakeet computes `p` as 1 - entropy / max entropy per token.
+    pub confidence: Option<f32>,
 }
 
 /// Engine stage times summed over all chunks. transcribe-cpp spreads the shared batch encode
@@ -55,12 +59,14 @@ impl Transcription {
         let words = &mut self.words;
         let seconds = |ms: i64| offset + ms as f64 / 1000.0;
         if !result.words.is_empty() {
-            words.extend(result.words.into_iter().filter_map(|w| {
+            let tokens = &result.tokens;
+            words.extend(result.words.iter().filter_map(|w| {
                 let text = w.text.trim();
                 (!text.is_empty()).then(|| Word {
                     start: seconds(w.t0_ms),
                     end: seconds(w.t1_ms),
                     text: text.to_owned(),
+                    confidence: word_confidence(tokens, w.first_token, w.n_tokens),
                 })
             }));
         } else {
@@ -83,6 +89,7 @@ impl Transcription {
                     start,
                     end,
                     text: text.to_owned(),
+                    confidence: None,
                 }));
             }
         }
@@ -182,6 +189,21 @@ impl Engine {
     }
 }
 
+/// The lowest token score of one word: one doubtful token makes the whole word doubtful.
+/// Punctuation tokens do not count: a doubtful full stop does not make the word doubtful.
+/// None when the word has no tokens in range or no token carries a score (NaN).
+fn word_confidence(tokens: &[Token], first: i32, count: i32) -> Option<f32> {
+    let first = usize::try_from(first).ok()?;
+    let count = usize::try_from(count).ok()?;
+    tokens
+        .get(first..first.checked_add(count)?)?
+        .iter()
+        .filter(|token| token.text.chars().any(char::is_alphanumeric))
+        .map(|token| token.p)
+        .filter(|p| !p.is_nan())
+        .reduce(f32::min)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -230,6 +252,7 @@ mod tests {
             upload_date: None,
             duration: Some(90.0),
             file_size: None,
+            description: None,
             sources: crate::sources::Sources::Local {
                 path: "/silence.wav".into(),
             },
@@ -249,6 +272,32 @@ mod tests {
         let index = std::fs::read_to_string(index).unwrap();
         assert!(index.lines().any(|line| line == "parts: 0"), "{index}");
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn token(text: &str, p: f32) -> Token {
+        Token {
+            p,
+            text: text.into(),
+            ..Default::default()
+        }
+    }
+    #[test]
+    fn a_word_scores_as_its_least_confident_token() {
+        let tokens = [
+            token("\u{2581}Gro", 0.9),
+            token("k", 0.2),
+            token("bot", 0.7),
+            token(".", 0.1),
+            token("\u{2581}so", f32::NAN),
+        ];
+        assert_eq!(word_confidence(&tokens, 0, 3), Some(0.2));
+        // The doubtful full stop does not lower "bot.".
+        assert_eq!(word_confidence(&tokens, 2, 2), Some(0.7));
+        // Only NaN or punctuation scores, an empty word or an index out of range: no score.
+        assert_eq!(word_confidence(&tokens, 3, 2), None);
+        assert_eq!(word_confidence(&tokens, 1, 0), None);
+        assert_eq!(word_confidence(&tokens, 4, 2), None);
+        assert_eq!(word_confidence(&tokens, -1, 1), None);
     }
 
     /// Regression for a sentence that transcribe-cpp dropped from a 52.6 s chunk.

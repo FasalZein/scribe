@@ -354,12 +354,14 @@ pub fn write(
     write_atomic(&dir.join("segments.jsonl"), &jsonl)?;
     write_atomic(&dir.join("meta.json"), &serde_json::to_vec_pretty(meta)?)?;
     frontmatter["parts"] = parts.len().into();
-    let words: usize = parts.iter().map(crate::parts::Part::words).sum();
-    frontmatter["words"] = words.into();
-    frontmatter["tokens_estimate"] = crate::parts::tokens_estimate(words).into();
+    let total_words: usize = parts.iter().map(crate::parts::Part::words).sum();
+    frontmatter["words"] = total_words.into();
+    frontmatter["tokens_estimate"] = crate::parts::tokens_estimate(total_words).into();
     let mut entry = format!("# {}\n\n", meta.title.replace(['\r', '\n'], " "));
     entry.push_str(&crate::sources::render(&meta.sources, &meta.chapters));
     entry.push_str("## Parts\n\n| part | time range | words | tokens_estimate | first words |\n| --- | --- | ---: | ---: | --- |\n");
+    // The start time and file name of each part, for the passage links below.
+    let mut part_files: Vec<(f64, String)> = Vec::new();
     for (i, part) in parts.iter().enumerate() {
         // A Part always holds at least one segment, as constructed by split.
         let first = part.segments.first().context("empty part")?;
@@ -398,6 +400,7 @@ pub fn write(
             ));
         }
         fs::write(parts_temp.join(&filename), body)?;
+        part_files.push((first.start, filename.clone()));
         entry.push_str(&format!(
             "| [{:02}](parts/{filename}) | {time_range} | {} | {} | {} |\n",
             i + 1,
@@ -406,6 +409,8 @@ pub fn write(
             preview.replace('|', "\\|")
         ));
     }
+    entry.push_str(&known_terms_section(meta));
+    entry.push_str(&low_confidence_section(words, &part_files));
     fs::rename(&parts_temp, dir.join("parts"))?;
     frontmatter["fetch_secs"] = (timings.get("metadata") + timings.get("download")).into();
     frontmatter["decode_secs"] = timings.get("decode").into();
@@ -426,6 +431,65 @@ pub fn write(
     // Write the index last so an incomplete run cannot be mistaken for a completed transcript.
     write_atomic(&index, header.as_bytes())?;
     Ok(index)
+}
+
+/// The "Known terms" section of index.md (ADR 0009).
+fn known_terms_section(meta: &Metadata) -> String {
+    let terms = crate::known_terms::extract(meta);
+    let mut out = String::from(
+        "\n## Known terms\n\nNames and handles from the source's metadata (uploader, title, post text, description). The transcript keeps the words as the engine heard them.\n\n",
+    );
+    if terms.is_empty() {
+        out.push_str("None found.\n");
+    } else {
+        let terms: Vec<String> = terms
+            .iter()
+            .map(|term| format!("`{}`", term.replace('`', "'")))
+            .collect();
+        out.push_str(&terms.join(", "));
+        out.push('\n');
+    }
+    out
+}
+
+/// The "Low-confidence passages" section of index.md: each passage with a timestamp that links
+/// to the part holding it (ADR 0009).
+fn low_confidence_section(words: &[Word], part_files: &[(f64, String)]) -> String {
+    let mut out = format!(
+        "\n## Low-confidence passages\n\nSpans the speech engine scored below {} confidence, doubtful words in bold. Check them against the context and the known terms before you quote them.\n\n",
+        crate::low_confidence::THRESHOLD
+    );
+    if words.iter().all(|word| word.confidence.is_none()) {
+        out.push_str("None: the model gives no word scores.\n");
+        return out;
+    }
+    let passages = crate::low_confidence::passages(words);
+    if passages.is_empty() {
+        out.push_str("None found.\n");
+        return out;
+    }
+    out.push_str("| time | score | passage |\n| --- | ---: | --- |\n");
+    for passage in &passages {
+        let start = words[passage.first].start;
+        // Parts are in time order and each starts at its first word, so the passage belongs to
+        // the last part that starts at or before its first word.
+        let file = part_files
+            .iter()
+            .rev()
+            .find(|(part_start, _)| *part_start <= start)
+            .or(part_files.first())
+            .map_or("", |(_, file)| file.as_str());
+        out.push_str(&format!(
+            "| [{}](parts/{file}) | {:.3} | {} |\n",
+            crate::sources::timestamp(start),
+            // Round down, so a score just below the threshold never prints as the threshold.
+            (passage.lowest * 1000.0).floor() / 1000.0,
+            crate::low_confidence::excerpt(words, passage)
+                .replace(['\r', '\n'], " ")
+                .replace('|', "\\|")
+        ));
+    }
+    out
 }
 
 /// `NN.md`, or `NN-<chapter-slug>[-<piece>].md`. The name never depends on transcript words,
@@ -459,6 +523,7 @@ mod tests {
             upload_date: date.map(Into::into),
             duration: Some(60.0),
             file_size: None,
+            description: None,
             sources: Sources::Local {
                 path: "/media.mp4".into(),
             },
@@ -473,6 +538,7 @@ mod tests {
                 start: start + i as f64 * step,
                 end: start + (i + 1) as f64 * step,
                 text: text.to_owned(),
+                confidence: None,
             })
             .collect()
     }
@@ -957,6 +1023,115 @@ mod tests {
         assert_eq!(starts, [2.0, 25.7]);
         let index = fs::read_to_string(dir.join("index.md")).unwrap();
         assert!(index.lines().any(|line| line == "hard_cuts: 2"), "{index}");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Long enough for three parts; every 50th word is doubtful, and so is one word at 1,000 s.
+    fn scored_words(scored: bool) -> Vec<Word> {
+        let sentence = "We measure the build on a quiet machine and write the number down.";
+        let mut words = timed(&vec![sentence; 600].join(" "), 0.0, 0.4);
+        for (i, word) in words.iter_mut().enumerate() {
+            word.confidence = scored.then_some(if i % 50 == 7 { 0.5 } else { 0.99 });
+        }
+        words
+    }
+    /// The transcript files, byte for byte. Only the run time in the transcript.md frontmatter
+    /// is left out, because it differs between any two runs.
+    fn files(dir: &Path) -> Vec<(String, Vec<u8>)> {
+        let transcript = fs::read_to_string(dir.join("transcript.md")).unwrap();
+        let transcript: String = transcript
+            .split_inclusive('\n')
+            .filter(|line| !line.starts_with("transcribed_at: "))
+            .collect();
+        assert!(transcript.contains("\n[00:00:00] We measure"));
+        let mut files = vec![
+            ("transcript.md".to_owned(), transcript.into_bytes()),
+            (
+                "segments.jsonl".to_owned(),
+                fs::read(dir.join("segments.jsonl")).unwrap(),
+            ),
+        ];
+        for name in names(&dir.join("parts")) {
+            files.push((
+                name.clone(),
+                fs::read(dir.join("parts").join(name)).unwrap(),
+            ));
+        }
+        files
+    }
+
+    #[test]
+    fn word_scores_never_change_the_transcript() {
+        let root = temp_root("scores");
+        let m = meta("youtube:a", "Video", Some("20260101"));
+        let dir = directory(&root, &m).unwrap();
+        let cli = Cli::parse_from(["scribe", "x"]);
+        write(
+            &dir,
+            &m,
+            &cli,
+            60.0,
+            &recorded_timings(),
+            &scored_words(false),
+            0,
+        )
+        .unwrap();
+        let without = files(&dir);
+        let index = fs::read_to_string(dir.join("index.md")).unwrap();
+        assert!(
+            index.contains("## Low-confidence passages\n\n")
+                && index.contains("None: the model gives no word scores."),
+            "{index}"
+        );
+        clear(&dir).unwrap();
+        write(
+            &dir,
+            &m,
+            &cli,
+            60.0,
+            &recorded_timings(),
+            &scored_words(true),
+            0,
+        )
+        .unwrap();
+        assert!(without.len() > 3, "the test needs several parts");
+        assert!(without == files(&dir), "transcript files differ");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn passages_link_to_the_part_that_holds_them() {
+        let root = temp_root("passages");
+        let m = meta("youtube:a", "Video", Some("20260101"));
+        let dir = directory(&root, &m).unwrap();
+        let cli = Cli::parse_from(["scribe", "x"]);
+        let words = scored_words(true);
+        write(&dir, &m, &cli, 60.0, &recorded_timings(), &words, 0).unwrap();
+        let index = fs::read_to_string(dir.join("index.md")).unwrap();
+        let section = index
+            .split("## Low-confidence passages\n")
+            .nth(1)
+            .expect("index has the section");
+        let rows: Vec<&str> = section.lines().filter(|l| l.starts_with("| [")).collect();
+        // Word 7, 57, 107, ... of 7,800 words: 156 doubtful words, too far apart to merge.
+        assert_eq!(rows.len(), 156);
+        assert_eq!(
+            rows[0],
+            "| [00:00:02](parts/01.md) | 0.500 | on a quiet **machine** and write the |"
+        );
+        for row in rows {
+            let (time, rest) = row[3..].split_once("](parts/").unwrap();
+            let file = rest.split(')').next().unwrap();
+            let part = fs::read_to_string(dir.join("parts").join(file))
+                .unwrap_or_else(|_| panic!("{file} does not exist"));
+            // The part's own range "· [start–end]" holds the passage time.
+            let range = part.lines().nth(2).unwrap().split('[').nth(1).unwrap();
+            let (start, end) = range.trim_end_matches(']').split_once('–').unwrap();
+            assert!(
+                start <= time && time <= end,
+                "{time} not in {file} [{range}]"
+            );
+        }
         fs::remove_dir_all(root).unwrap();
     }
 }

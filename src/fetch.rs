@@ -137,6 +137,9 @@ pub struct Metadata {
     pub duration: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file_size: Option<u64>,
+    /// The yt-dlp description, read for known terms. meta.json does not store it.
+    #[serde(skip)]
+    pub description: Option<String>,
     pub sources: Sources,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub chapters: Vec<Chapter>,
@@ -187,6 +190,7 @@ pub fn media(input: &str, audio_stream: usize) -> Result<(Metadata, Pending)> {
                 upload_date: None,
                 duration: probe_duration(&path, audio_stream),
                 file_size: Some(info.len()),
+                description: None,
                 sources: Sources::Local {
                     path: path.to_string_lossy().into_owned(),
                 },
@@ -220,6 +224,7 @@ pub fn media(input: &str, audio_stream: usize) -> Result<(Metadata, Pending)> {
         upload_date: text("upload_date"),
         duration: raw["duration"].as_f64(),
         file_size: None,
+        description: text("description"),
         sources: Sources::Web {
             url: text("webpage_url").unwrap_or_else(|| input.to_owned()),
             channel_url: text("channel_url").or_else(|| text("uploader_url")),
@@ -885,6 +890,7 @@ fn x_metadata(post: &serde_json::Value, raw: &serde_json::Value) -> Result<Metad
             })
             .and_then(|m| m["duration"].as_f64()),
         file_size: None,
+        description: None,
         sources: Sources::X {
             url: url.to_owned(),
             author: format!("{author} (@{handle})"),

@@ -4,7 +4,7 @@ A **lesson** is one reusable piece of knowledge from a source. Restate it so it 
 
 ## Read and append
 
-1. Read `index.md`: frontmatter, Sources, Chapters and the Parts table.
+1. Read `index.md`: frontmatter, Sources, Chapters, the Parts table, Known terms and Low-confidence passages.
 2. Read the topics index named under "Existing topics" in your brief, if it exists. Reuse an existing topic slug when it fits.
 3. Read every part in order. Use the file names in the Parts table. Sources without chapters use `parts/NN.md`. Chapter parts use `parts/NN-<part>.md`, where `<part>` is the chapter slug. A chapter split into several parts adds a piece number, for example `parts/02-long-chapter-1.md`.
 4. Create the frontmatter below, then append each part's lessons after reading that part. Continue numbering across parts. Leave `lessons` and frontmatter `topics` for `scribe lessons finalize` to compute.
@@ -12,7 +12,12 @@ A **lesson** is one reusable piece of knowledge from a source. Restate it so it 
 
 The transcript has no speaker labels. Identify speakers from Sources, the title, self-introductions and cues such as "as Armin said". You may name the person behind a public handle from your own knowledge; add `(inferred)` in `speakers`. Add `(inferred)` in `who` when attribution is a guess. Write `speaker` when there is no cue.
 
-Speech recognition can mishear names and terms. Use known terms from `index.md` and source context to correct them in lessons. Preserve the transcript. Record unresolved spellings under Open questions. Check low-confidence passages before quoting them.
+Speech recognition can mishear names and terms. The transcript keeps the words as the engine heard them; never edit it. Use two sections of `index.md` to write names correctly in lessons:
+
+- **Known terms** lists handles and names from the source's metadata. When a transcript word sounds like a known term, write the known term in the lesson. Example: the transcript says "Potato" and the known terms list `poteto`.
+- **Low-confidence passages** lists spans the engine scored as doubtful, each with a timestamp link to its part. Doubtful words are in bold. Before you quote a passage or name a term from it, check it against the context and the known terms. Do not quote a passage you cannot resolve; restate it instead.
+
+A mishearing can also score high, so a word outside these passages can still be wrong. Record each unresolved spelling under Open questions.
 
 Write lessons in English. Keep an optional quote in the source language. If the transcript has no readable speech, write no lessons and report `no usable speech: <reason>`.
 
