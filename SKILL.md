@@ -48,7 +48,7 @@ scribe <source>...
 
 stdout prints one absolute `index.md` path per source, in order. Progress goes to stderr. A source that already has an `index.md` is skipped and still printed. scribe finds the folder by a stable source ID, not by title or date, so re-running a list is safe. `--force` redoes a transcript and keeps its `lessons.md`. When a source fails, scribe continues with the others and exits non-zero. If a YouTube source fails with HTTP 403, run scribe once more on that source; a second 403 is a failure. Report the stderr line for each failed source.
 
-A 30-minute video takes about 15-20 s to transcribe on Apple Silicon with Metal, and several minutes on a CPU, plus download time. The first run downloads the 740 MB model.
+A 30-minute video takes about 15-20 s to transcribe on Apple Silicon with Metal, and about 2-3 minutes on a 6-core CPU, plus download time. The first run downloads the 740 MB model.
 
 Done when every source has an `index.md` path or a reported failure.
 
