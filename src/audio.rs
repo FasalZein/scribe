@@ -359,9 +359,13 @@ mod tests {
         }
         let network = std::env::var_os("SCRIBE_FFMPEG_TEST_NETWORK").is_some();
         assert_eq!(
-            decode_blocks("https://stream.invalid/video.mp4".as_ref(), network, |_| {
-                true
-            })
+            decode_blocks(
+                "https://stream.invalid/video.mp4".as_ref(),
+                network,
+                0,
+                None,
+                |_| { true }
+            )
             .unwrap(),
             1
         );

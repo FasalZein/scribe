@@ -236,8 +236,16 @@ mod tests {
             chapters: Vec::new(),
         };
         let cli = Cli::parse_from(["scribe", "x"]);
-        let index =
-            crate::output::write(&dir, &meta, &cli, 90.0, 1.0, &transcription.words, 0).unwrap();
+        let index = crate::output::write(
+            &dir,
+            &meta,
+            &cli,
+            90.0,
+            &crate::timings::Timings::new(false),
+            &transcription.words,
+            0,
+        )
+        .unwrap();
         let index = std::fs::read_to_string(index).unwrap();
         assert!(index.lines().any(|line| line == "parts: 0"), "{index}");
         std::fs::remove_dir_all(dir).unwrap();
