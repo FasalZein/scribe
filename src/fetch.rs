@@ -266,19 +266,55 @@ pub fn model(input: &str) -> Result<PathBuf> {
 
 /// A cached model is reused when its size matches and, for the default model, its SHA-256.
 /// The hash keeps a different or damaged file at the cache path from loading as the default
-/// model. It costs about 1.5 s for 740 MB on an M4 Pro (sha2 without its `asm` feature uses no
-/// ARM SHA instructions); the loader thread runs it while the media decodes (ADR 0005).
+/// model. Hashing 740 MB costs about 0.8-1.5 s on an M4 Pro (sha2 without its `asm` feature
+/// uses no ARM SHA instructions), so a verified hash is recorded in a marker file keyed by the
+/// file's size and modification time, and later runs check only the marker. Accepted limit: a
+/// change that keeps both size and modification time goes unnoticed; delete the marker (or the
+/// model) to force a full check.
 fn is_cached(path: &Path, expected: Option<u64>, sha256: Option<&str>) -> bool {
     let (Some(size), Ok(info)) = (expected, fs::metadata(path)) else {
         return false;
     };
-    info.len() == size
-        && sha256.is_none_or(|sha256| {
-            let mut hasher = Sha256::new();
-            fs::File::open(path)
-                .and_then(|mut file| std::io::copy(&mut file, &mut hasher))
-                .is_ok_and(|_| hex(&hasher.finalize()) == sha256)
-        })
+    if info.len() != size {
+        return false;
+    }
+    let Some(sha256) = sha256 else {
+        return true;
+    };
+    let marker = marker_line(sha256, &info);
+    if marker.is_some() && fs::read_to_string(marker_path(path)).ok() == marker {
+        return true;
+    }
+    let mut hasher = Sha256::new();
+    let verified = fs::File::open(path)
+        .and_then(|mut file| std::io::copy(&mut file, &mut hasher))
+        .is_ok_and(|_| hex(&hasher.finalize()) == sha256);
+    if verified {
+        write_marker(path, sha256);
+    }
+    verified
+}
+
+fn marker_path(path: &Path) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(".verified");
+    PathBuf::from(name)
+}
+
+/// `<sha256> <size> <mtime ns>`; `None` when the file system reports no modification time.
+fn marker_line(sha256: &str, info: &fs::Metadata) -> Option<String> {
+    let mtime = info.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
+    Some(format!("{sha256} {} {}\n", info.len(), mtime.as_nanos()))
+}
+
+/// Best effort: without a marker the next run hashes the file again.
+fn write_marker(path: &Path, sha256: &str) {
+    if let Some(line) = fs::metadata(path)
+        .ok()
+        .and_then(|info| marker_line(sha256, &info))
+    {
+        let _ = fs::write(marker_path(path), line);
+    }
 }
 
 fn download(
@@ -339,6 +375,9 @@ fn download(
         }
         file.sync_all()?;
         fs::rename(&part, path)?;
+        if let Some(sha256) = sha256 {
+            write_marker(path, sha256);
+        }
         eprintln!("Model cached: {} ({total} bytes)", path.display());
         Ok(())
     })();
@@ -651,9 +690,12 @@ mod tests {
         assert!(!path.exists());
         download(&data[..], &path, Some(11), Some(&digest)).unwrap();
         assert_eq!(fs::read(&path).unwrap(), data);
-        assert_eq!(
-            fs::read_dir(&dir).unwrap().count(),
-            1,
+        assert!(
+            fs::read_dir(&dir).unwrap().all(|entry| !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".part")),
             "no .part file is left"
         );
         fs::remove_dir_all(dir).unwrap();
@@ -670,10 +712,67 @@ mod tests {
         assert!(is_cached(&path, Some(11), None));
         assert!(!is_cached(&path, Some(12), None), "size differs");
         assert!(!is_cached(&path, None, None), "size unknown");
+        let mtime = fs::metadata(&path).unwrap().modified().unwrap();
         fs::write(&path, b"other bytes").unwrap();
+        // Coarse file-system clocks can give the rewrite the same mtime; move it explicitly so
+        // the verified marker no longer matches and the hash runs.
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(mtime + Duration::from_secs(5))
+            .unwrap();
         assert!(
             !is_cached(&path, Some(11), Some(&digest)),
             "same size, other content"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn verified_marker_skips_rehash_until_size_or_mtime_changes() {
+        let dir = temp_dir("marker");
+        let path = dir.join("model.gguf");
+        let data = b"model bytes";
+        let digest = sha256_hex(data);
+        fs::write(&path, data).unwrap();
+        assert!(is_cached(&path, Some(11), Some(&digest)));
+        assert!(
+            marker_path(&path).exists(),
+            "a verified hash writes a marker"
+        );
+        let mtime = fs::metadata(&path).unwrap().modified().unwrap();
+
+        // Same size and restored mtime: the marker is trusted (the documented limit).
+        fs::write(&path, b"other bytes").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(mtime)
+            .unwrap();
+        assert!(is_cached(&path, Some(11), Some(&digest)));
+
+        // A new mtime invalidates the marker, so the hash runs and rejects the file.
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(mtime + Duration::from_secs(5))
+            .unwrap();
+        assert!(!is_cached(&path, Some(11), Some(&digest)));
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn download_writes_a_verified_marker() {
+        let dir = temp_dir("download-marker");
+        let path = dir.join("model.gguf");
+        let data = b"model bytes";
+        let digest = sha256_hex(data);
+        download(&data[..], &path, Some(11), Some(&digest)).unwrap();
+        let info = fs::metadata(&path).unwrap();
+        assert_eq!(
+            fs::read_to_string(marker_path(&path)).ok(),
+            marker_line(&digest, &info)
         );
         fs::remove_dir_all(dir).unwrap();
     }

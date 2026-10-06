@@ -159,6 +159,7 @@ A local build tunes ggml for the build machine's CPU. The release binaries and `
 | `ffprobe` not found, or a warning that the duration is unknown | Install ffmpeg with ffprobe. scribe reads local file durations with ffprobe to detect truncated files. |
 | `scribe: command not found` after install | Add the install directory to PATH: `export PATH="$HOME/.local/bin:$PATH"`. The installer prints this hint. |
 | You want the previous model, Parakeet TDT 0.6B v3 | Pass `-m https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf/resolve/90f082450fcbacdb54e5900c44ef697c9ea59622/parakeet-tdt-0.6b-v3-Q8_0.gguf` ([ADR 0008](docs/adr/0008-parakeet-ultra-single-default.md)). |
+| You suspect the cached model file is damaged | scribe hashes the default model once and then trusts a `.verified` marker next to it while the file's size and modification time are unchanged. Delete `parakeet-ultra-Q8_0.gguf.verified` (or the model) in the cache directory to force a full SHA-256 check on the next run. |
 | X post fails with HTTP 429 | The X API rate-limits requests. Wait for the reported `Retry-After`; scribe does not retry. |
 
 ## Design decisions
