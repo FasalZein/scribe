@@ -37,37 +37,40 @@ fn process(
         eprintln!("skip: {} exists (use --force)", index.display());
         return Ok(index);
     }
-    let workspace = fetch::Workspace::new()?;
-    let (media, pcm, transcription) = transcribe(media, &workspace.0, &meta, cli, engine, timings)?;
+    let workspace = fetch::Workspace::new(&meta.id)?;
+    let (media, pcm, transcription) =
+        transcribe(media, &workspace.path, &meta, cli, engine, timings)?;
     let duration = pcm.len() as f64 / audio::SAMPLE_RATE as f64;
     let engine_secs = timings.get("engine");
     eprintln!("Transcribed {duration:.1}s of audio in {engine_secs:.2}s of engine time");
     let write_start = Instant::now();
-    output::clear(&dir)?;
-    if cli.keep_media {
-        use std::io::Write;
-        let mut audio = std::io::BufWriter::new(fs::File::create(dir.join("audio.f32le"))?);
-        for sample in &pcm {
-            audio.write_all(&sample.to_le_bytes())?;
+    let index = output::replace(&dir, |stage| {
+        if cli.keep_media {
+            use std::io::Write;
+            let mut audio = std::io::BufWriter::new(fs::File::create(stage.join("audio.f32le"))?);
+            for sample in &pcm {
+                audio.write_all(&sample.to_le_bytes())?;
+            }
+            audio.flush()?;
+            if fetch::is_url(input)
+                && let fetch::Media::File(media) = &media
+            {
+                let name = media.file_name().context("download has no filename")?;
+                fs::copy(media, stage.join(name))?;
+            }
         }
-        audio.flush()?;
-        if fetch::is_url(input)
-            && let fetch::Media::File(media) = &media
-        {
-            let name = media.file_name().context("download has no filename")?;
-            fs::copy(media, dir.join(name))?;
-        }
-    }
-    let index = output::write(
-        &dir,
-        &meta,
-        cli,
-        duration,
-        timings,
-        &transcription.words,
-        transcription.hard_cuts,
-    )?;
+        output::write(
+            stage,
+            &meta,
+            cli,
+            duration,
+            timings,
+            &transcription.words,
+            transcription.hard_cuts,
+        )
+    })?;
     timings.add("write", write_start.elapsed().as_secs_f64());
+    workspace.complete();
     Ok(index)
 }
 type Loader<'scope> = std::thread::ScopedJoinHandle<'scope, (Result<engine::Engine>, f64)>;

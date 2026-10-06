@@ -40,21 +40,87 @@ pub fn command_output(command: &mut Command, tool: &str) -> Result<Output> {
     Ok(output)
 }
 
-pub struct Workspace(pub PathBuf);
-impl Workspace {
-    pub fn new() -> Result<Self> {
-        let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-        let path = std::env::temp_dir().join(format!("scribe-{}-{nonce}", std::process::id()));
-        fs::create_dir(&path)?;
-        Ok(Self(path))
-    }
+/// Failed runs keep media for seven days since last use. Active workspaces are never swept.
+const MEDIA_STALE_AFTER: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
+pub struct Workspace {
+    pub path: PathBuf,
+    // The lock lives beside the directory so Windows can remove the completed directory.
+    _lock: fs::File,
 }
-impl Drop for Workspace {
-    fn drop(&mut self) {
-        if let Err(error) = fs::remove_dir_all(&self.0) {
+impl Workspace {
+    pub fn new(source_id: &str) -> Result<Self> {
+        let cache = dirs::cache_dir()
+            .context("platform cache directory is unavailable")?
+            .join("scribe/media");
+        Self::in_cache(&cache, source_id, SystemTime::now())
+    }
+
+    fn in_cache(cache: &Path, source_id: &str, now: SystemTime) -> Result<Self> {
+        fs::create_dir_all(cache)?;
+        Self::sweep(cache, now)?;
+        let key = sha256_hex(source_id.as_bytes());
+        let lock = Self::lock(cache, &key)?;
+        lock.try_lock()
+            .with_context(|| format!("media download already in use for {source_id}"))?;
+        let path = cache.join(key);
+        fs::create_dir_all(&path)?;
+        // Explicitly refresh on reuse, even when yt-dlp has not written any new bytes yet.
+        let marker = fs::File::create(path.join("last-used"))?;
+        marker.set_modified(now)?;
+        Ok(Self { path, _lock: lock })
+    }
+
+    fn lock(cache: &Path, key: &str) -> Result<fs::File> {
+        Ok(fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(cache.join(format!("{key}.lock")))?)
+    }
+
+    fn sweep(cache: &Path, now: SystemTime) -> Result<()> {
+        for entry in fs::read_dir(cache)? {
+            let entry = entry?;
+            let key = entry.file_name();
+            let key = key.to_string_lossy();
+            // Own only full source-ID hashes, never arbitrary user files or symlinks.
+            if key.len() != 64
+                || !key.bytes().all(|b| b.is_ascii_hexdigit())
+                || !entry.file_type()?.is_dir()
+            {
+                continue;
+            }
+            // Lock before reading the marker: a concurrent run may have refreshed it since
+            // read_dir. Another run may also have removed its completed directory already.
+            let lock = Self::lock(cache, &key)?;
+            if lock.try_lock().is_err() {
+                continue;
+            }
+            let path = entry.path();
+            let info = match fs::metadata(path.join("last-used")).or_else(|_| fs::metadata(&path)) {
+                Ok(info) => info,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error.into()),
+            };
+            if now
+                .duration_since(info.modified()?)
+                .is_ok_and(|age| age >= MEDIA_STALE_AFTER)
+            {
+                fs::remove_dir_all(path)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Only a successful publication retires resumable media. Lock files are tiny and retained
+    /// to avoid a race where another process locks an unlinked inode for the same source ID.
+    pub fn complete(self) {
+        if let Err(error) = fs::remove_dir_all(&self.path) {
             eprintln!(
-                "warning: cannot remove temporary directory {}: {error}",
-                self.0.display()
+                "warning: cannot remove media cache {}: {error}",
+                self.path.display()
             );
         }
     }
@@ -185,25 +251,7 @@ pub fn resolve(media: Pending, workspace: &Path) -> Result<Media> {
     let info_path = workspace.join("info.json");
     fs::write(&info_path, info)?;
     eprintln!("Downloading media");
-    let output_path = yt_dlp(|command| {
-        command
-            .args([
-                "--no-playlist",
-                "--no-progress",
-                // yt-dlp skips a fragment it cannot fetch and still succeeds. The decoded audio
-                // then misses that stretch, and the duration check allows up to 1 % of slack.
-                "--abort-on-unavailable-fragments",
-                "-f",
-                "bestaudio/best",
-                // Print the final media path: a user config can add subtitles or thumbnails.
-                "--print",
-                "after_move:filepath",
-                "-o",
-            ])
-            .arg(workspace.join("media.%(ext)s"))
-            .arg("--load-info-json")
-            .arg(&info_path);
-    })?;
+    let output_path = yt_dlp(|command| media_download_args(command, workspace, &info_path))?;
     let path = String::from_utf8_lossy(&output_path.stdout)
         .lines()
         .rev()
@@ -213,6 +261,30 @@ pub fn resolve(media: Pending, workspace: &Path) -> Result<Media> {
         .filter(|path| path.is_file())
         .context("yt-dlp did not produce a media file")?;
     Ok(Media::File(path))
+}
+
+fn media_download_args(command: &mut Command, workspace: &Path, info_path: &Path) {
+    command
+        .args([
+            "--no-playlist",
+            "--no-progress",
+            "--continue",
+            // yt-dlp skips a fragment it cannot fetch and still succeeds. The decoded audio
+            // then misses that stretch, and the duration check allows up to 1 % of slack.
+            "--abort-on-unavailable-fragments",
+            // Keep the best audio-only format: a lower audio bitrate needs a WER comparison
+            // first (ADR 0005). Without one, take the smallest format that carries audio, so a
+            // site with only progressive video does not download its largest file.
+            "-f",
+            "bestaudio/worst[acodec!=none]",
+            // Print the final media path: a user config can add subtitles or thumbnails.
+            "--print",
+            "after_move:filepath",
+            "-o",
+        ])
+        .arg(workspace.join("media.%(ext)s"))
+        .arg("--load-info-json")
+        .arg(info_path);
 }
 
 pub fn model(input: &str) -> Result<PathBuf> {
@@ -1242,6 +1314,103 @@ mod tests {
         assert_eq!(fs::read(recent).unwrap(), b"resumable");
         fs::remove_dir_all(dir).unwrap();
     }
+    #[test]
+    fn interrupted_media_workspace_reuses_partial_bytes_for_the_same_source_id() {
+        let cache = temp_dir("media-resume");
+        let first = Workspace::in_cache(&cache, "youtube:a", SystemTime::now()).unwrap();
+        let path = first.path.clone();
+        fs::write(path.join("media.webm.part"), "download prefix").unwrap();
+        drop(first); // A failed run must retain the checkpoint, just like a killed run.
+        let next = Workspace::in_cache(&cache, "youtube:a", SystemTime::now()).unwrap();
+        assert_eq!(next.path, path);
+        assert_eq!(
+            fs::read_to_string(next.path.join("media.webm.part")).unwrap(),
+            "download prefix"
+        );
+        next.complete();
+        assert!(!path.exists());
+        fs::remove_dir_all(cache).unwrap();
+    }
+
+    #[test]
+    fn media_workspace_uses_the_platform_cache_and_separates_source_ids() {
+        let id = format!("scribe-workspace-test:{}", std::process::id());
+        let first = Workspace::new(&id).unwrap();
+        assert!(
+            first
+                .path
+                .starts_with(dirs::cache_dir().unwrap().join("scribe/media"))
+        );
+        assert!(
+            Workspace::new(&id).is_err(),
+            "concurrent downloads of one source must not overwrite each other"
+        );
+        let other = Workspace::new(&format!("{id}:other")).unwrap();
+        assert_ne!(first.path, other.path);
+        first.complete();
+        other.complete();
+    }
+
+    #[test]
+    fn stale_media_is_swept_but_recent_active_and_unrelated_files_are_kept() {
+        let cache = temp_dir("media-sweep");
+        let now = SystemTime::now();
+        let old = now - MEDIA_STALE_AFTER - Duration::from_secs(1);
+        let stale = Workspace::in_cache(&cache, "youtube:stale", old).unwrap();
+        let stale_path = stale.path.clone();
+        fs::write(stale.path.join("media.mp4.part"), "stale prefix").unwrap();
+        drop(stale);
+        let active = Workspace::in_cache(&cache, "youtube:active", old).unwrap();
+        let active_path = active.path.clone();
+        fs::write(active.path.join("media.mp4.part"), "active prefix").unwrap();
+        let recent = Workspace::in_cache(&cache, "youtube:recent", now).unwrap();
+        let recent_path = recent.path.clone();
+        drop(recent);
+        fs::create_dir(cache.join("unrelated")).unwrap();
+        Workspace::sweep(&cache, now).unwrap();
+        assert!(!stale_path.exists());
+        assert_eq!(
+            fs::read_to_string(active_path.join("media.mp4.part")).unwrap(),
+            "active prefix"
+        );
+        assert!(recent_path.exists());
+        assert!(cache.join("unrelated").exists());
+        drop(active);
+        Workspace::sweep(&cache, now).unwrap();
+        assert!(!active_path.exists());
+        fs::remove_dir_all(cache).unwrap();
+    }
+
+    #[test]
+    fn media_arguments_resume_and_prefer_audio_then_the_smallest_audio_bearing_video() {
+        let mut command = Command::new("yt-dlp");
+        media_download_args(
+            &mut command,
+            Path::new("/disk/cache/source"),
+            Path::new("/disk/cache/source/info.json"),
+        );
+        let args: Vec<_> = command
+            .get_args()
+            .map(|s| s.to_string_lossy().into_owned())
+            .collect();
+        assert!(args.iter().any(|arg| arg == "--continue"), "{args:?}");
+        assert!(
+            args.iter()
+                .any(|arg| arg == "--abort-on-unavailable-fragments"),
+            "{args:?}"
+        );
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["-f", "bestaudio/worst[acodec!=none]"]),
+            "{args:?}"
+        );
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["-o", "/disk/cache/source/media.%(ext)s"]),
+            "{args:?}"
+        );
+    }
+
     #[test]
     fn local_source_id_follows_content_not_path() {
         let dir = temp_dir("file-id");

@@ -117,35 +117,78 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     result.with_context(|| format!("cannot write {}", path.display()))
 }
 
-/// Remove the files of an earlier transcript before a new one is published: first the
-/// completion marker, then parts and kept media. Agent-written files such as lessons.md stay.
-pub fn clear(dir: &Path) -> Result<()> {
-    let index = dir.join("index.md");
-    if index.exists() {
-        fs::remove_file(&index)?;
-    }
-    let parts_dir = dir.join("parts");
-    if parts_dir.exists() {
-        fs::remove_dir_all(&parts_dir)?;
-    }
-    for entry in fs::read_dir(dir)? {
-        let path = entry?.path();
-        let name = path.file_name().unwrap_or_default().to_string_lossy();
-        if path.is_file() && (name == "audio.f32le" || name.starts_with("media.")) {
-            fs::remove_file(&path)?;
-        } else if name.starts_with('.') && name.ends_with(".tmp") {
-            // Left by an interrupted write.
-            if path.is_dir() {
-                fs::remove_dir_all(&path)?;
-            } else {
-                fs::remove_file(&path)?;
-            }
+/// Generated files belong to the publication; agent-written files do not.
+fn generated(name: &str) -> bool {
+    matches!(
+        name,
+        "index.md" | "parts" | "transcript.md" | "segments.jsonl" | "meta.json" | "audio.f32le"
+    ) || name.starts_with("media.")
+        || (name.starts_with('.') && name.ends_with(".tmp"))
+}
+
+/// Keep agent-written files at the same inode. In particular, never write lessons.md.
+fn link_preserved(from: &Path, to: &Path) -> Result<()> {
+    if fs::symlink_metadata(from)?.is_dir() {
+        fs::create_dir(to)?;
+        for entry in fs::read_dir(from)? {
+            let entry = entry?;
+            link_preserved(&entry.path(), &to.join(entry.file_name()))?;
         }
+    } else {
+        fs::hard_link(from, to)?;
     }
     Ok(())
 }
 
-/// Write the transcript files of a cleared folder. Every file is written atomically, and
+/// Stage a full publication beside the current directory. Only a completed stage can replace
+/// it. Two same-filesystem renames publish it; a failed second rename restores the old directory.
+/// The backup also retains the old publication if the process is killed between the renames.
+pub fn replace(dir: &Path, build: impl FnOnce(&Path) -> Result<PathBuf>) -> Result<PathBuf> {
+    let parent = dir.parent().context("publication has no parent")?;
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_nanos();
+    let stage = parent.join(format!(".scribe-stage-{}-{nonce}", std::process::id()));
+    let backup = parent.join(format!(".scribe-backup-{}-{nonce}", std::process::id()));
+    fs::create_dir(&stage)?;
+    let result = (|| {
+        build(&stage)?;
+        anyhow::ensure!(
+            stage.join("index.md").is_file(),
+            "staged publication has no index"
+        );
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            if !generated(&entry.file_name().to_string_lossy()) {
+                link_preserved(&entry.path(), &stage.join(entry.file_name()))?;
+            }
+        }
+        fs::rename(dir, &backup)?;
+        if let Err(error) = fs::rename(&stage, dir) {
+            fs::rename(&backup, dir).with_context(|| {
+                format!(
+                    "cannot restore publication; previous files remain at {}",
+                    backup.display()
+                )
+            })?;
+            return Err(error.into());
+        }
+        // Cleanup cannot turn a successful publication into a reported failure.
+        if let Err(error) = fs::remove_dir_all(&backup) {
+            eprintln!(
+                "warning: cannot remove publication backup {}: {error}",
+                backup.display()
+            );
+        }
+        Ok(dir.join("index.md"))
+    })();
+    if stage.exists() {
+        let _ = fs::remove_dir_all(&stage);
+    }
+    result
+}
+
+/// Write the transcript files of a staged folder. Every file is written atomically, and
 /// index.md last: it is the completion marker that the skip check trusts.
 pub fn write(
     dir: &Path,
@@ -347,8 +390,18 @@ mod tests {
     }
     fn publish(dir: &Path, meta: &Metadata, word: &str) -> PathBuf {
         let cli = Cli::parse_from(["scribe", "x"]);
-        clear(dir).unwrap();
-        write(dir, meta, &cli, 60.0, &recorded_timings(), &words(word), 0).unwrap()
+        replace(dir, |stage| {
+            write(
+                stage,
+                meta,
+                &cli,
+                60.0,
+                &recorded_timings(),
+                &words(word),
+                0,
+            )
+        })
+        .unwrap()
     }
     fn names(dir: &Path) -> Vec<String> {
         let mut names: Vec<_> = fs::read_dir(dir)
@@ -491,6 +544,99 @@ mod tests {
         assert_ne!(
             directory(&root, &other).unwrap(),
             std::path::absolute(&legacy).unwrap()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_force_write_preserves_the_complete_previous_publication() {
+        let root = temp_root("force-failure");
+        let m = meta("youtube:a", "Video", Some("20260101"));
+        let dir = directory(&root, &m).unwrap();
+        publish(&dir, &m, "old");
+        fs::write(dir.join("lessons.md"), "lesson").unwrap();
+        fs::write(dir.join("audio.f32le"), "pcm").unwrap();
+        fs::write(dir.join("media.webm"), "media").unwrap();
+        let original_index = fs::read(dir.join("index.md")).unwrap();
+        let original_part = fs::read(dir.join("parts/01.md")).unwrap();
+        let cli = Cli::parse_from(["scribe", "x", "--force"]);
+        let result = replace(&dir, |stage| {
+            fs::write(stage.join("audio.f32le"), "new pcm")?;
+            // A directory at the temporary file path injects a real filesystem write error.
+            fs::create_dir(stage.join(format!(".transcript.md.{}.tmp", std::process::id())))?;
+            write(stage, &m, &cli, 60.0, &recorded_timings(), &words("new"), 0)
+        });
+        assert!(result.is_err());
+        assert_eq!(fs::read(dir.join("index.md")).unwrap(), original_index);
+        assert_eq!(fs::read(dir.join("parts/01.md")).unwrap(), original_part);
+        assert_eq!(fs::read_to_string(dir.join("audio.f32le")).unwrap(), "pcm");
+        assert_eq!(fs::read_to_string(dir.join("media.webm")).unwrap(), "media");
+        assert_eq!(
+            fs::read_to_string(dir.join("lessons.md")).unwrap(),
+            "lesson"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn successful_force_stages_kept_media_and_preserves_agent_written_files() {
+        let root = temp_root("force-kept-media");
+        let m = meta("youtube:a", "Video", Some("20260101"));
+        let dir = directory(&root, &m).unwrap();
+        publish(&dir, &m, "old");
+        fs::write(dir.join("lessons.md"), "lesson").unwrap();
+        fs::create_dir(dir.join("notes")).unwrap();
+        fs::write(dir.join("notes/custom.md"), "custom note").unwrap();
+        fs::write(dir.join("media.webm"), "old media").unwrap();
+        fs::write(dir.join("audio.f32le"), "old pcm").unwrap();
+        #[cfg(unix)]
+        let lesson_inode = {
+            use std::os::unix::fs::MetadataExt;
+            fs::metadata(dir.join("lessons.md")).unwrap().ino()
+        };
+        let cli = Cli::parse_from(["scribe", "x", "--force", "--keep-media"]);
+        let index = replace(&dir, |stage| {
+            assert_eq!(
+                stage.parent(),
+                dir.parent(),
+                "stage must share the output filesystem"
+            );
+            assert!(fs::read_to_string(dir.join("transcript.md"))?.contains("old 0"));
+            fs::write(stage.join("audio.f32le"), "new pcm")?;
+            fs::write(stage.join("media.mp4"), "new media")?;
+            write(stage, &m, &cli, 60.0, &recorded_timings(), &words("new"), 0)
+        })
+        .unwrap();
+        assert_eq!(index, dir.join("index.md"));
+        assert!(!dir.join("media.webm").exists());
+        assert_eq!(
+            fs::read_to_string(dir.join("audio.f32le")).unwrap(),
+            "new pcm"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.join("media.mp4")).unwrap(),
+            "new media"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.join("lessons.md")).unwrap(),
+            "lesson"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.join("notes/custom.md")).unwrap(),
+            "custom note"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            assert_eq!(
+                fs::metadata(dir.join("lessons.md")).unwrap().ino(),
+                lesson_inode
+            );
+        }
+        assert_eq!(
+            fs::read_dir(&root).unwrap().count(),
+            1,
+            "successful publication cleans its stage and backup"
         );
         fs::remove_dir_all(root).unwrap();
     }
