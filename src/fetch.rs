@@ -98,18 +98,26 @@ impl Workspace {
             if lock.try_lock().is_err() {
                 continue;
             }
-            let path = entry.path();
-            let info = match fs::metadata(path.join("last-used")).or_else(|_| fs::metadata(&path)) {
-                Ok(info) => info,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(error) => return Err(error.into()),
-            };
-            if now
-                .duration_since(info.modified()?)
-                .is_ok_and(|age| age >= MEDIA_STALE_AFTER)
-            {
-                fs::remove_dir_all(path)?;
-            }
+            let result = Self::sweep_one(&entry.path(), now);
+            // Unlock explicitly: a child forked meanwhile shares this open file until it execs,
+            // and closing our copy alone would not release the lock.
+            let _ = lock.unlock();
+            result?;
+        }
+        Ok(())
+    }
+
+    fn sweep_one(path: &Path, now: SystemTime) -> Result<()> {
+        let info = match fs::metadata(path.join("last-used")).or_else(|_| fs::metadata(path)) {
+            Ok(info) => info,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error.into()),
+        };
+        if now
+            .duration_since(info.modified()?)
+            .is_ok_and(|age| age >= MEDIA_STALE_AFTER)
+        {
+            fs::remove_dir_all(path)?;
         }
         Ok(())
     }
@@ -123,6 +131,14 @@ impl Workspace {
                 self.path.display()
             );
         }
+    }
+}
+impl Drop for Workspace {
+    // A child process forked by another thread shares the lock's open file until it execs
+    // (Rust forks instead of using posix_spawn when a command changes PATH). Closing our copy
+    // alone would keep the lock for that window, so release it explicitly.
+    fn drop(&mut self) {
+        let _ = self._lock.unlock();
     }
 }
 
