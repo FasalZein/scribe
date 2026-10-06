@@ -1,0 +1,128 @@
+# Manual x86_64 CPU benchmark for issue #12 (tuned CPU builds).
+# Builds three Linux x86_64 binaries in the release container and times them on one runner:
+#   release  - exactly the release.yml settings.
+#   v3       - release settings plus explicit ggml AVX2-tier options (x86-64-v3: AVX2, FMA, F16C, BMI2).
+#   baseline - release settings plus TRANSCRIBE_X86_CONSERVATIVE=ON (every x86 SIMD tier OFF).
+# With GGML_NATIVE=OFF and no cross-compiling, ggml defaults its x86 SIMD options to ON, so the
+# release build may already be AVX2-tier. The cache dump and instruction counts below show this.
+name: CPU bench
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  MODEL_URL: https://huggingface.co/handy-computer/parakeet-ultra-gguf/resolve/39eeb55181f0d354fd934f06e92fd8d5037fed8e/parakeet-ultra-Q8_0.gguf
+  MODEL_SHA256: 007a59761e9258779f189df396b50d12b83bb5b79e66df4b955c230d2f2a0a59
+  # Sir Ken Robinson, "Do schools kill creativity?" (TED 2006), TED's own download host. CC BY-NC-ND 4.0.
+  CLIP_URL: https://download.ted.com/talks/SirKenRobinson_2006-480p.mp4
+  CLIP_SECONDS: '300'
+  ROUNDS: '3'
+jobs:
+  bench:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build release, v3 and baseline binaries in manylinux_2_28
+        run: |
+          mkdir -p bench
+          docker run --rm --platform linux/amd64 \
+            -v "$PWD:/src" -w /src quay.io/pypa/manylinux_2_28_x86_64 bash -euo pipefail -c '
+              curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+              export PATH=/root/.cargo/bin:$PATH
+              # Same RUSTFLAGS and base CMake args as release.yml.
+              export RUSTFLAGS="-L native=$(dirname "$(g++ -print-file-name=libstdc++.a)") -l static=stdc++ -l static=gcc_eh -C link-arg=-static-libgcc"
+              base="-DGGML_NATIVE=OFF -DTRANSCRIBE_USE_SYSTEM_BLAS=OFF"
+              build() {
+                echo "::group::build $1"
+                # Clean the engine so CMake configures from scratch with the new options.
+                cargo clean --release -p transcribe-cpp-sys || true
+                TRANSCRIBE_CMAKE_ARGS="$base $2" cargo build --release --locked
+                cp target/release/scribe "bench/scribe-$1"
+                echo "TRANSCRIBE_CMAKE_ARGS=$base $2" > "bench/cmake-$1.txt"
+                find target/release/build -path "*/build/CMakeCache.txt" -exec grep -hE \
+                  "^(GGML_(NATIVE|SSE42|AVX|AVX2|AVX_VNNI|AVX512|FMA|F16C|BMI2)|TRANSCRIBE_(X86_CONSERVATIVE|USE_SYSTEM_BLAS)):" {} \; \
+                  | sort >> "bench/cmake-$1.txt"
+                cat "bench/cmake-$1.txt"
+                echo "::endgroup::"
+              }
+              build release ""
+              build v3 "-DGGML_SSE42=ON -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_BMI2=ON -DGGML_AVX_VNNI=OFF -DGGML_AVX512=OFF"
+              build baseline "-DTRANSCRIBE_X86_CONSERVATIVE=ON"
+              chown -R "$(stat -c %u:%g /src)" bench target
+            '
+      - name: Show runner CPU and instruction use per binary
+        run: |
+          lscpu | grep -E 'Model name|^CPU\(s\)'
+          grep -o -w -E 'avx2|fma|f16c|bmi2|avx512f' /proc/cpuinfo | sort | uniq -c
+          for b in release v3 baseline; do
+            objdump -d --no-show-raw-insn "bench/scribe-$b" > "bench/$b.dis"
+            printf '%s: AVX2 ymm vpmaddubsw=%s FMA vfmadd=%s F16C vcvtph2ps=%s any ymm=%s sha256=%s\n' "$b" \
+              "$(grep -cE 'vpmaddubsw.*ymm' "bench/$b.dis")" "$(grep -c vfmadd "bench/$b.dis")" \
+              "$(grep -c vcvtph2ps "bench/$b.dis")" "$(grep -c ymm "bench/$b.dis")" \
+              "$(sha256sum "bench/scribe-$b" | cut -d' ' -f1)" | tee -a bench/instructions.txt
+            rm "bench/$b.dis"
+            "bench/scribe-$b" --version
+          done
+      - name: Download model and clip
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg > /dev/null
+          ffmpeg -version | sed -n 1p
+          curl -fsSL --retry 3 -o model.gguf "$MODEL_URL"
+          echo "$MODEL_SHA256  model.gguf" | sha256sum -c -
+          curl -fsSL --retry 3 -o talk.mp4 "$CLIP_URL"
+          sha256sum talk.mp4
+          ffmpeg -hide_banner -loglevel error -i talk.mp4 -t "$CLIP_SECONDS" -ac 1 -ar 16000 -c:a pcm_s16le clip.wav
+          ffprobe -hide_banner -loglevel error -show_entries format=duration -of csv=p=0 clip.wav
+      - name: Time alternating runs
+        run: |
+          printf '| Round | Binary | Load 1/5/15 min before run | Engine s | Wall s | Words |\n| --- | --- | --- | ---: | ---: | ---: |\n' > bench/table.md
+          for round in $(seq "$ROUNDS"); do
+            for b in release v3 baseline; do
+              id="$b-$round"
+              load=$(cut -d' ' -f1-3 /proc/loadavg)
+              uptime | tee "bench/$id.load"
+              start=$(date +%s.%N)
+              "bench/scribe-$b" clip.wav -m model.gguf --backend cpu --timings -o "bench/out-$id" \
+                > "bench/$id.stdout" 2> "bench/$id.stderr"
+              wall=$(awk -v s="$start" -v e="$(date +%s.%N)" 'BEGIN { print e - s }')
+              engine=$(sed -n 's/^engine_secs: //p' bench/out-"$id"/*/index.md)
+              words=$(jq -r .text bench/out-"$id"/*/segments.jsonl | wc -w)
+              printf '| %s | %s | %s | %.2f | %.2f | %s |\n' "$round" "$b" "$load" "$engine" "$wall" "$words" | tee -a bench/table.md
+            done
+          done
+          {
+            echo
+            echo '| Binary | Median engine s | Median wall s |'
+            echo '| --- | ---: | ---: |'
+            for b in release v3 baseline; do
+              med() { sort -n | awk '{a[NR]=$1} END{print (NR%2 ? a[(NR+1)/2] : (a[NR/2]+a[NR/2+1])/2)}'; }
+              e=$(grep -E "^\| [0-9]+ \| $b \|" bench/table.md | awk -F'|' '{print $5}' | med)
+              w=$(grep -E "^\| [0-9]+ \| $b \|" bench/table.md | awk -F'|' '{print $6}' | med)
+              printf '| %s | %s | %s |\n' "$b" "$e" "$w"
+            done
+          } | tee -a bench/table.md
+          { echo '## CPU bench'; echo; cat bench/table.md; echo; echo '```'; cat bench/instructions.txt bench/cmake-*.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Compare transcripts
+        run: |
+          for b in release v3 baseline; do
+            jq -r .text bench/out-"$b"-1/*/segments.jsonl > "bench/text-$b.txt"
+            cp bench/out-"$b"-1/*/transcript.md "bench/transcript-$b.md"
+          done
+          for b in v3 baseline; do
+            if cmp -s bench/text-release.txt "bench/text-$b.txt"; then echo "$b text == release text"
+            else echo "$b text differs from release:"; diff bench/text-release.txt "bench/text-$b.txt" || true; fi
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cpu-bench
+          path: |
+            bench/table.md
+            bench/instructions.txt
+            bench/cmake-*.txt
+            bench/transcript-*.md
+            bench/text-*.txt
+            bench/*.load
+            bench/*.stderr
