@@ -1,8 +1,23 @@
 # scribe
 
-Rust CLI (`src/`) plus the agent skill (`SKILL.md`, `reference/`). Domain terms live in `GLOSSARY.md`; decisions live in `docs/adr/`.
+Rust CLI (`src/`) plus the agent skill (`SKILL.md`, `reference/`, `scripts/install.sh`). Domain terms live in `GLOSSARY.md`; decisions live in `docs/adr/`.
 
 - Delegated work on this repository (workers, reviewers, any helper that edits or reviews the CLI or the skill) runs on Opus: `anthropic/claude-opus-5-5`. The user asked for this.
-- Verify with `cargo build --release && cargo test && cargo clippy --all-targets -- -D warnings && cargo fmt --check`.
-- The accuracy regression test needs the model and a media file, so plain `cargo test` skips it. Run it with `SCRIBE_REGRESSION_MODEL=... SCRIBE_REGRESSION_MEDIA=... cargo test --release -- --ignored` after any change to chunking or the engine (see ADR 0003).
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `cargo build --release && cargo test && cargo clippy --all-targets -- -D warnings && cargo fmt --check` | Full check. Run before handoff. |
+| `SCRIBE_REGRESSION_MODEL=<gguf> SCRIBE_REGRESSION_MEDIA=<Pi durable-sessions talk> cargo test --release -- --ignored` | Lost-speech regression test; plain `cargo test` skips it. Run after any change to chunking or the engine. |
+| `scribe <source> --timings` | Per-stage wall times on stderr; see ADR 0005 for how to read them. |
+| `SCRIBE_TEST_MODEL=<gguf> SCRIBE_TEST_MEDIA=<mp4> scripts/linux-test.sh [arm64\|amd64]` | Linux CPU build, tests and a 3-minute end-to-end run in Docker. |
+| `git tag vX.Y.Z && git push origin vX.Y.Z` | Release: `.github/workflows/release.yml` builds and attaches the binaries. The tag must equal `version` in `Cargo.toml`, which `scripts/install.sh` also reads. |
+
+## Traps
+
+- The default chunk is 30 s on purpose: transcribe-cpp's Parakeet drops whole sentences from chunks near 60 s (ADR 0003).
 - Word count alone does not prove accuracy. Compare against a reference transcript, as in ADR 0003.
+- A cold Metal model load takes about 17 s instead of 0.2 s, because macOS shares and rebuilds its Metal shader cache. Discard the first run in a benchmark.
+- YouTube returns HTTP 403 now and then. Retry once with `uvx yt-dlp@latest` before you treat it as a bug; exclude such runs from benchmarks.
+- Builds for other machines need `TRANSCRIBE_CMAKE_ARGS=-DGGML_NATIVE=OFF` (CI and release set it). A native build fails with GCC 12 in an OrbStack arm64 VM.

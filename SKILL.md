@@ -22,9 +22,9 @@ topics/INDEX.md                one line per topic
 
 ### 1. Check the tools
 
-Run `scribe --version`, `ffmpeg -version` and `uvx --version`. If `scribe` is missing, install it with `cargo install --path <this skill's directory>`; [`README.md`](README.md) covers the prerequisites per platform.
+Run `scribe --version`, `ffprobe -version` and `uvx --version` (or `yt-dlp --version`). If one fails, run `<this skill's directory>/scripts/install.sh` (on Windows, `scripts/install.ps1`) and follow what it prints. The script installs `scribe` and checks ffmpeg, ffprobe, and uvx or yt-dlp. It prints the install command for each missing tool; run those commands only with the user's approval.
 
-Done when all three commands print a version.
+Done when every version command succeeds, or the install script exits 0.
 
 ### 2. Collect the sources and the focus
 
@@ -33,6 +33,8 @@ Gather every URL and file path the user gave. Expand a playlist or channel into 
 ```bash
 uvx yt-dlp@latest --flat-playlist --print url "<playlist-or-channel-url>"
 ```
+
+For X, use the [browse-x](https://github.com/pc-style/x-md) skill when it is installed: search posts or read a profile to find posts with video, and read the replies or thread of a post for context. scribe reads the post text itself, so browse-x is optional.
 
 Ask for a **focus** only when the user's request implies one ("how can X help me" is a focus). A focus is optional.
 
@@ -44,9 +46,9 @@ Done when you hold a list of sources and the focus (or none).
 scribe <source>...
 ```
 
-stdout prints one absolute `index.md` path per source, in order. Progress goes to stderr. A source that already has an `index.md` is skipped and still printed. scribe finds the folder by a stable source ID, not by title or date, so re-running a list is safe. `--force` redoes a transcript and keeps its `lessons.md`. When a source fails, scribe continues with the others and exits non-zero; report the stderr line for each failed source.
+stdout prints one absolute `index.md` path per source, in order. Progress goes to stderr. A source that already has an `index.md` is skipped and still printed. scribe finds the folder by a stable source ID, not by title or date, so re-running a list is safe. `--force` redoes a transcript and keeps its `lessons.md`. When a source fails, scribe continues with the others and exits non-zero. If a YouTube source fails with HTTP 403, run scribe once more on that source; a second 403 is a failure. Report the stderr line for each failed source.
 
-A 30-minute video takes about 15-20 s to transcribe on Apple Silicon, plus download time. The first run downloads the 740 MB model.
+A 30-minute video takes about 15-20 s to transcribe on Apple Silicon with Metal, and several minutes on a CPU, plus download time. The first run downloads the 740 MB model.
 
 Done when every source has an `index.md` path or a reported failure.
 
