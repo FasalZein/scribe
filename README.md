@@ -21,7 +21,8 @@ On Windows: `powershell -ExecutionPolicy Bypass -File $HOME\.agents\skills\scrib
 The installer:
 
 - downloads the prebuilt `scribe` for your OS and CPU from the [latest release](https://github.com/FasalZein/scribe/releases/latest), verifies its SHA-256, and installs it to `${SCRIBE_INSTALL_DIR:-$HOME/.local/bin}`;
-- builds from source with `cargo install` when no prebuilt binary matches and cargo, cmake and a C++ compiler exist;
+- builds from source with `cargo install` when no prebuilt binary matches and cargo, cmake and a C++ compiler exist, and copies the build to the same directory;
+- checks the installed version against the skill's version, and prints the `cargo install --tag` command when the latest release is older than the skill;
 - checks ffmpeg, ffprobe, and `uvx` or `yt-dlp`, and prints the install command (brew, apt, dnf, pacman or winget) for each missing tool. It never runs a package manager or sudo.
 
 It exits 0 when everything is ready. Run it again at any time; it changes nothing when scribe is current.

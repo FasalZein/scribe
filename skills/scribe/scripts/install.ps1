@@ -66,7 +66,13 @@ function InstallFromSource {
     if ((Have 'cargo') -and (Have 'cmake') -and $cxx) {
         Write-Host 'building scribe from source with cargo (a few minutes)'
         & cargo install --locked --git "https://github.com/$Repo" --tag "v$SkillVersion" scribe
-        if ($LASTEXITCODE -ne 0) { $Missing.Add("cargo install --git https://github.com/$Repo --tag v$SkillVersion failed; see the output above") }
+        if ($LASTEXITCODE -ne 0) { $Missing.Add("cargo install --git https://github.com/$Repo --tag v$SkillVersion failed; see the output above"); return }
+        # Copy the build to the install dir, which FindScribe checks first.
+        $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $HOME '.cargo' }
+        try {
+            New-Item -ItemType Directory -Force $InstallDir | Out-Null
+            Copy-Item (Join-Path $cargoHome 'bin\scribe.exe') $Exe -Force
+        } catch { $Missing.Add("scribe: built in $cargoHome\bin but cannot copy it to ${InstallDir}: $_") }
         return
     }
     $Missing.Add('scribe: no prebuilt binary and cannot build from source. Install: winget install Rustlang.Rustup Kitware.CMake Microsoft.VisualStudio.2022.BuildTools (with the C++ workload), then run this script again.')
@@ -86,8 +92,14 @@ if ($version -and ([version]$version -ge [version]$SkillVersion)) {
     }
     $current = FindScribe
     $version = if ($current) { ScribeVersion $current } else { $null }
-    if ($version) { Write-Host "ok: scribe $version ($current)" }
-    elseif ($current) { $Missing.Add("scribe: $current --version fails on this machine") }
+    if (-not $current) {
+        if ($Missing.Count -eq 0) { $Missing.Add('scribe: not found after the install') }
+    } elseif (-not $version) { $Missing.Add("scribe: $current --version fails on this machine") }
+    elseif ([version]$version -ge [version]$SkillVersion) { Write-Host "ok: scribe $version ($current)" }
+    else {
+        # The latest release is older than this skill: the skill came from a newer commit.
+        $Missing.Add("scribe $version is older than this skill ($SkillVersion); its release is not published yet. Build it: cargo install --locked --git https://github.com/$Repo --tag v$SkillVersion scribe")
+    }
 }
 
 if ((Test-Path $Exe) -and -not (($env:PATH -split ';') -contains $InstallDir)) {

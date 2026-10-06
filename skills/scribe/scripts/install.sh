@@ -142,7 +142,14 @@ install_from_source() {
   cxx=""; for c in c++ g++ clang++; do have "$c" && { cxx=$c; break; }; done
   if have cargo && have cmake && [ -n "$cxx" ]; then
     say "building scribe from source with cargo (a few minutes)"
-    cargo install --locked --git "https://github.com/$REPO" --tag "v$skill_version" scribe && return 0
+    if cargo install --locked --git "https://github.com/$REPO" --tag "v$skill_version" scribe; then
+      # Copy the build to install_dir, which find_scribe checks first.
+      built="${CARGO_HOME:-$HOME/.cargo}/bin/scribe"
+      mkdir -p "$install_dir" && cp "$built" "$install_dir/.scribe.new" && chmod 755 "$install_dir/.scribe.new" \
+        && mv -f "$install_dir/.scribe.new" "$install_dir/scribe" && return 0
+      problem "scribe: built $built but cannot copy it to $install_dir"
+      return 1
+    fi
     problem "cargo install --git https://github.com/$REPO --tag v$skill_version failed; see the output above"
     return 1
   fi
@@ -181,8 +188,13 @@ else
   esac
   current=$(find_scribe)
   [ -n "$current" ] && current_version=$(scribe_version "$current")
-  if [ -n "$current_version" ]; then say "ok: scribe $current_version ($current)"
-  elif [ -n "$current" ]; then problem "scribe: $current --version fails on this machine"
+  if [ -z "$current" ]; then
+    [ -n "$missing" ] || problem "scribe: not found after the install"
+  elif [ -z "$current_version" ]; then problem "scribe: $current --version fails on this machine"
+  elif [ "$(version_ge "$current_version" "$skill_version")" = 1 ]; then say "ok: scribe $current_version ($current)"
+  else
+    # The latest release is older than this skill: the skill came from a newer commit.
+    problem "scribe $current_version is older than this skill ($skill_version); its release is not published yet. Build it: cargo install --locked --git https://github.com/$REPO --tag v$skill_version scribe"
   fi
 fi
 
