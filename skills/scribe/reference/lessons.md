@@ -6,11 +6,13 @@ You are extracting lessons from one transcript. A **lesson** is one reusable pie
 
 1. Read `index.md`: frontmatter, Sources (post text, links, description), Chapters and the Parts table.
 2. Read the topics index named under "Existing topics" in your brief, if it exists, so you reuse existing topic slugs.
-3. Read every part in order. Take notes as you go; the last part often holds the conclusion or the call to action.
+3. Read every part in order; the last part often holds the conclusion or the call to action. After each part, append its lessons to `lessons.md`, so a long source never holds all of its lessons only in your context. Write the frontmatter at the top of the file and the Focus answer last, when every part is read. A `lessons.md` without frontmatter marks an unfinished extraction.
 
 The transcript has no speaker labels. Identify speakers from the Sources section, the title, self-introductions and cues such as "as Armin said". You may use your own knowledge to name the person behind a public handle; add `(inferred)` after the name in `speakers`. Attribute each turn from such cues; when a turn's attribution is a guess, add `(inferred)` after the name in `who`. When there is no cue at all, write `speaker`.
 
 Transcripts come from speech recognition. Names and terms are often misheard (for example "PyDurable" for "Pi Durable", "Burcell" for "Vercel"). Write the correct form in lessons when the context makes it clear. Note it under Open questions when the context does not make it clear.
+
+Write lessons in English for every source. Keep the optional quote in the source language. When the transcript holds no readable speech (noise, music, or text that makes no sense), write no lessons and reply `no usable speech: <reason>`.
 
 ## Select
 
@@ -65,7 +67,8 @@ lessons: <count>
 - **topics**: 1-3 lower-kebab slugs that name subjects, not sources (`durable-execution`, not `pi-durable-talk`). Reuse a slug from `topics/INDEX.md` when one fits.
 - **verify**: the last bullet, present only when the lesson states a fact (a number, a version, a benchmark, a product capability) that the transcript alone cannot prove. Name what to check. Omit the bullet otherwise.
 - One lesson holds one idea. Split a passage that makes two points. A run of numbers about one thing (one product, one benchmark) is one idea.
+- Keep the speaker's conditions, exceptions and uncertainty in the body and in the Focus answer. A deliberate trade-off is not unfinished work.
 
 ## Done
 
-Every part is read, every lesson has kind, who, at and topics, and the frontmatter `lessons` count matches the number of `### L` headings.
+Every part is read, every lesson has kind, who, at and topics, every `at` link names a part file that exists and holds that `[hh:mm:ss]` timestamp, the frontmatter `topics` list holds every topic slug used, and the frontmatter `lessons` count matches the number of `### L` headings.
