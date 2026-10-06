@@ -40,7 +40,6 @@ fn process(
     let duration = pcm.len() as f64 / audio::SAMPLE_RATE as f64;
     let engine_secs = timings.get("engine");
     eprintln!("Transcribed {duration:.1}s of audio in {engine_secs:.2}s of engine time");
-    let segments = transcription.segments;
     let write_start = Instant::now();
     output::clear(&dir)?;
     if cli.keep_media {
@@ -57,7 +56,15 @@ fn process(
             fs::copy(media, dir.join(name))?;
         }
     }
-    let index = output::write(&dir, &meta, cli, duration, engine_secs, &segments)?;
+    let index = output::write(
+        &dir,
+        &meta,
+        cli,
+        duration,
+        engine_secs,
+        &transcription.words,
+        transcription.hard_cuts,
+    )?;
     timings.add("write", write_start.elapsed().as_secs_f64());
     Ok(index)
 }
@@ -147,7 +154,9 @@ fn transcribe(
         timings.add("decode", decode);
         anyhow::ensure!(samples == pcm.len(), "decoded samples were lost");
         audio::check_complete(pcm.len(), meta.duration)?;
-        pending.extend(chunker.finish(&pcm));
+        let (rest, hard_cuts) = chunker.finish(&pcm);
+        pending.extend(rest);
+        transcription.hard_cuts = hard_cuts;
         for batch in pending.chunks(engine::BATCH_CHUNKS) {
             let start = Instant::now();
             engine.run(&pcm, batch, &mut transcription)?;

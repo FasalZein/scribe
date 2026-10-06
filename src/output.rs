@@ -1,4 +1,4 @@
-use crate::{cli::Cli, engine::Segment, fetch::Metadata};
+use crate::{cli::Cli, engine::Word, fetch::Metadata};
 use anyhow::{Context, Result};
 use std::{
     fs,
@@ -150,7 +150,8 @@ pub fn write(
     cli: &Cli,
     duration: f64,
     engine_secs: f64,
-    segments: &[Segment],
+    words: &[Word],
+    hard_cuts: usize,
 ) -> Result<PathBuf> {
     let index = dir.join("index.md");
     // Build parts in a temporary folder and rename it into place.
@@ -159,12 +160,13 @@ pub fn write(
         fs::remove_dir_all(&parts_temp)?;
     }
     fs::create_dir(&parts_temp)?;
-    let parts = crate::parts::split(segments, &meta.chapters);
+    let segments = crate::parts::segments(words);
+    let parts = crate::parts::split(&segments, &meta.chapters);
     let mut frontmatter = serde_json::json!({
         "title": meta.title, "source": meta.source, "source_id": meta.id, "uploader": meta.uploader,
         "upload_date": meta.upload_date, "duration_secs": duration, "model": cli.model,
         "transcribed_at": OffsetDateTime::now_utc().format(&Rfc3339)?,
-        "chunk_secs": cli.chunk_secs.get(), "engine_secs": engine_secs,
+        "chunk_secs": cli.chunk_secs.get(), "engine_secs": engine_secs, "hard_cuts": hard_cuts,
     });
     if let Some(language) = &cli.language {
         frontmatter["language"] = language.clone().into();
@@ -189,7 +191,7 @@ pub fn write(
         crate::sources::render(&meta.sources, &meta.chapters)
     )?;
     let mut jsonl = Vec::new();
-    for segment in segments {
+    for segment in &segments {
         writeln!(
             markdown,
             "[{}] {}\n",
@@ -308,19 +310,27 @@ mod tests {
             chapters: Vec::new(),
         }
     }
-    fn segments(word: &str) -> Vec<Segment> {
-        (0..3)
-            .map(|i| Segment {
-                start: i as f64 * 20.0,
-                end: i as f64 * 20.0 + 20.0,
-                text: format!("{word} {i}"),
+    /// Words spoken one per `step` seconds from `start`.
+    fn timed(text: &str, start: f64, step: f64) -> Vec<Word> {
+        text.split_whitespace()
+            .enumerate()
+            .map(|(i, text)| Word {
+                start: start + i as f64 * step,
+                end: start + (i + 1) as f64 * step,
+                text: text.to_owned(),
             })
+            .collect()
+    }
+    /// Three 20 s sentences "Say <word> <i>.", at 0, 20 and 40 s.
+    fn words(word: &str) -> Vec<Word> {
+        (0..3)
+            .flat_map(|i| timed(&format!("Say {word} {i}."), i as f64 * 20.0, 20.0 / 3.0))
             .collect()
     }
     fn publish(dir: &Path, meta: &Metadata, word: &str) -> PathBuf {
         let cli = Cli::parse_from(["scribe", "x"]);
         clear(dir).unwrap();
-        write(dir, meta, &cli, 60.0, 1.0, &segments(word)).unwrap()
+        write(dir, meta, &cli, 60.0, 1.0, &words(word), 0).unwrap()
     }
     fn names(dir: &Path) -> Vec<String> {
         let mut names: Vec<_> = fs::read_dir(dir)
@@ -472,6 +482,39 @@ mod tests {
             names(&dir.join("parts")),
             ["01-intro.md", "02-main-part.md"]
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn timestamps_mark_the_first_word_of_their_text() {
+        let root = temp_root("word-times");
+        let m = meta("youtube:a", "Video", Some("20260101"));
+        let dir = directory(&root, &m).unwrap();
+        // A 30 s chunk cut falls at 30 s, inside the second sentence. The first sentence starts
+        // after 2 s of silence and ends at 24.5 s; the second starts at 25.7 s.
+        let first = "First we measure the build on a quiet machine and we write the number down.";
+        let second = "Then we change one flag and we measure the same build again on that machine.";
+        let mut words = timed(first, 2.0, 1.5);
+        words.extend(timed(second, 25.7, 1.5));
+        let cli = Cli::parse_from(["scribe", "x"]);
+        write(&dir, &m, &cli, 60.0, 1.0, &words, 2).unwrap();
+        let expected = format!("[00:00:02] {first}\n\n[00:00:25] {second}\n\n");
+        let transcript = fs::read_to_string(dir.join("transcript.md")).unwrap();
+        assert!(transcript.ends_with(&expected), "{transcript}");
+        let part = fs::read_to_string(dir.join("parts/01.md")).unwrap();
+        assert!(part.ends_with(&expected), "{part}");
+        let starts: Vec<f64> = fs::read_to_string(dir.join("segments.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|line| {
+                serde_json::from_str::<serde_json::Value>(line).unwrap()["start"]
+                    .as_f64()
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(starts, [2.0, 25.7]);
+        let index = fs::read_to_string(dir.join("index.md")).unwrap();
+        assert!(index.lines().any(|line| line == "hard_cuts: 2"), "{index}");
         fs::remove_dir_all(root).unwrap();
     }
 }

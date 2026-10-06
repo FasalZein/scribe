@@ -1,6 +1,5 @@
 use crate::{audio::SAMPLE_RATE, cli::Cli};
 use anyhow::{Context, Result};
-use serde::Serialize;
 use std::ops::Range;
 use transcribe_cpp::{
     DeviceType, Model, ModelOptions, RunOptions, Session, SessionOptions, TimestampKind,
@@ -17,8 +16,8 @@ pub const BATCH_CHUNKS: usize = 16;
 /// loaded host one parked worker stalls every step. Measurements: docs/adr/0006-decoder-threads.md.
 const GPU_DECODER_THREADS: i32 = 1;
 
-#[derive(Serialize)]
-pub struct Segment {
+/// One word of the transcript, with its time in the source in seconds.
+pub struct Word {
     pub start: f64,
     pub end: f64,
     pub text: String,
@@ -33,11 +32,13 @@ pub struct EngineTimings {
     pub decode: f64,
 }
 
-/// Segments and engine times, filled one batch at a time.
+/// Words and engine times, filled one batch at a time.
 #[derive(Default)]
 pub struct Transcription {
-    pub segments: Vec<Segment>,
+    pub words: Vec<Word>,
     pub timings: EngineTimings,
+    /// Chunk cuts made at the length limit (see `audio::Chunker`), set by the caller.
+    pub hard_cuts: usize,
     chunks: usize,
 }
 
@@ -73,11 +74,13 @@ impl Engine {
                 n_threads.to_string()
             }
         );
-        let capabilities = model.capabilities();
-        let timestamps = if capabilities.max_timestamp_kind == TimestampKind::None {
-            TimestampKind::None
-        } else {
-            TimestampKind::Segment
+        // Request the finest timestamps the model has. Word times let every paragraph start at
+        // the word it cites (ADR 0013). For Parakeet the finest kind is Token: its token rows
+        // also carry the engine's per-token confidence `p`, at no extra engine cost.
+        let timestamps = match model.capabilities().max_timestamp_kind {
+            kind @ (TimestampKind::Token | TimestampKind::Word) => kind,
+            TimestampKind::None => TimestampKind::None,
+            _ => TimestampKind::Segment,
         };
         let options = RunOptions {
             language: cli.language.clone(),
@@ -105,7 +108,7 @@ impl Engine {
         }
         Ok(transcription)
     }
-    /// Transcribe the `ranges` of `pcm` as one batch and append their segments.
+    /// Transcribe the `ranges` of `pcm` as one batch and append their words.
     pub fn run(
         &mut self,
         pcm: &[f32],
@@ -131,19 +134,40 @@ impl Engine {
             timings.encode += f64::from(result.timings.encode_ms) / 1000.0;
             timings.decode += f64::from(result.timings.decode_ms) / 1000.0;
             let offset = range.start as f64 / SAMPLE_RATE as f64;
-            let segments = &mut transcription.segments;
-            if result.timestamp_kind != TimestampKind::None && !result.segments.is_empty() {
-                segments.extend(result.segments.into_iter().map(|s| Segment {
-                    start: offset + s.t0_ms as f64 / 1000.0,
-                    end: offset + s.t1_ms as f64 / 1000.0,
-                    text: s.text.trim().to_owned(),
+            let words = &mut transcription.words;
+            let seconds = |ms: i64| offset + ms as f64 / 1000.0;
+            if !result.words.is_empty() {
+                words.extend(result.words.into_iter().filter_map(|w| {
+                    let text = w.text.trim();
+                    (!text.is_empty()).then(|| Word {
+                        start: seconds(w.t0_ms),
+                        end: seconds(w.t1_ms),
+                        text: text.to_owned(),
+                    })
                 }));
             } else {
-                segments.push(Segment {
-                    start: offset,
-                    end: range.end as f64 / SAMPLE_RATE as f64,
-                    text: result.text.trim().to_owned(),
-                });
+                // A model without word times: every word gets the times of its segment, or of
+                // the whole chunk without segment times. A paragraph timestamp can then be up to
+                // one segment early, as it was before word timestamps.
+                let spans: Vec<(f64, f64, String)> = if result.timestamp_kind != TimestampKind::None
+                    && !result.segments.is_empty()
+                {
+                    result
+                        .segments
+                        .into_iter()
+                        .map(|s| (seconds(s.t0_ms), seconds(s.t1_ms), s.text))
+                        .collect()
+                } else {
+                    let end = range.end as f64 / SAMPLE_RATE as f64;
+                    vec![(offset, end, result.text)]
+                };
+                for (start, end, text) in spans {
+                    words.extend(text.split_whitespace().map(|text| Word {
+                        start,
+                        end,
+                        text: text.to_owned(),
+                    }));
+                }
             }
         }
         Ok(())
@@ -176,9 +200,9 @@ mod tests {
         let text = engine
             .transcribe(pcm, cli.chunk_secs)
             .unwrap()
-            .segments
+            .words
             .into_iter()
-            .map(|segment| segment.text)
+            .map(|word| word.text)
             .collect::<Vec<_>>()
             .join(" ");
         assert!(

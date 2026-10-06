@@ -100,7 +100,7 @@ $SCRIBE_LIBRARY/
     index.md        frontmatter, Sources, Chapters, Parts table; written last
     parts/NN.md     transcript slices of about 2,500 words (NN-<chapter>.md with chapters)
     transcript.md   full transcript with [hh:mm:ss] paragraphs
-    segments.jsonl  {"start":0.0,"end":60.0,"text":"..."} per engine segment
+    segments.jsonl  {"start":2.4,"end":27.9,"text":"..."} per paragraph
     meta.json       source ID, Sources, Chapters, duration and engine data
     lessons.md      written by the agent, kept by --force
   topics/<topic>.md merged lessons on one subject
@@ -108,6 +108,9 @@ $SCRIBE_LIBRARY/
 ```
 
 - `index.md` is the completion marker. Every file is written to a temporary file and renamed, and `index.md` comes last, so an interrupted run leaves no index and the next run redoes the source.
+- A paragraph timestamp marks the first word of the paragraph. A paragraph starts at a sentence start, not at a chunk cut. Only speech with no sentence end for 60 s gets a cut at a word boundary.
+- A part ends at a chapter start, or at the first sentence end after about 2,500 words. A full stop before a lowercase word is not a sentence end.
+- The `index.md` frontmatter key `hard_cuts` counts the chunk cuts made at the chunk length limit because no quiet point was found. Such a cut can split a word.
 - Each row of the Parts table gives the time range, the word count, `tokens_estimate` (`round(words × 1.33)`) and the first 12 words.
 - Sources list the post or page URL, the author or channel, and links from the post or description. Chapters come from yt-dlp.
 - scribe fails a source when ffmpeg reports an error or the decoded audio is shorter than the reported duration by more than 5 s or 1 %. This catches truncated downloads.

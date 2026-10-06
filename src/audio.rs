@@ -15,10 +15,19 @@ const SHORT_FRACTION: f64 = 0.01;
 /// Split the whole audio into chunks of at most `seconds`, cut at a quiet point.
 #[cfg(test)]
 pub fn chunks(pcm: &[f32], seconds: std::num::NonZeroU32) -> Vec<Range<usize>> {
+    chunks_and_hard_cuts(pcm, seconds).0
+}
+/// `chunks`, and the count of hard cuts among them.
+#[cfg(test)]
+pub fn chunks_and_hard_cuts(
+    pcm: &[f32],
+    seconds: std::num::NonZeroU32,
+) -> (Vec<Range<usize>>, usize) {
     let mut chunker = Chunker::new(seconds);
     let mut ranges = chunker.ready(pcm);
-    ranges.extend(chunker.finish(pcm));
-    ranges
+    let (rest, hard_cuts) = chunker.finish(pcm);
+    ranges.extend(rest);
+    (ranges, hard_cuts)
 }
 
 /// Cuts chunks from audio that is still growing, with the same cut points as `chunks` on the
@@ -29,8 +38,10 @@ pub struct Chunker {
     target: usize,
     /// Start of the first chunk whose end is still unknown.
     next: usize,
-    /// Final chunks that are not released yet.
-    held: std::collections::VecDeque<Range<usize>>,
+    /// Final chunks that are not released yet, each with true when it ends at a hard cut.
+    held: std::collections::VecDeque<(Range<usize>, bool)>,
+    /// Hard cuts among the released chunks.
+    hard_cuts: usize,
 }
 impl Chunker {
     pub fn new(seconds: std::num::NonZeroU32) -> Self {
@@ -38,38 +49,52 @@ impl Chunker {
             target: seconds.get() as usize * SAMPLE_RATE,
             next: 0,
             held: Default::default(),
+            hard_cuts: 0,
         }
+    }
+    /// Cut the chunk that starts at `self.next` and hold it. A hard cut is a cut inside the
+    /// audio at the length limit: `cut` found no quiet point. A quiet cut always lies at least
+    /// half a window before the limit, so the two cannot be confused.
+    fn hold_next(&mut self, pcm: &[f32]) {
+        let end = cut(pcm, self.next, self.target);
+        let hard = end < pcm.len() && end == self.next + self.target;
+        self.held.push_back((self.next..end, hard));
+        self.next = end;
     }
     /// Chunks that no later audio can change. `pcm` is the audio so far; it may only grow.
     pub fn ready(&mut self, pcm: &[f32]) -> Vec<Range<usize>> {
         while self.next + self.target < pcm.len() {
-            let end = cut(pcm, self.next, self.target);
-            self.held.push_back(self.next..end);
-            self.next = end;
+            self.hold_next(pcm);
         }
         let mut ranges = Vec::new();
-        while let Some(first) = self.held.front()
+        while let Some((first, _)) = self.held.front()
             && first.end + MIN_CHUNK <= pcm.len()
         {
-            ranges.extend(self.held.pop_front());
+            let (range, hard) = self.held.pop_front().expect("a held chunk");
+            self.hard_cuts += usize::from(hard);
+            ranges.push(range);
         }
         ranges
     }
-    /// The remaining chunks once `pcm` holds the whole audio.
-    pub fn finish(mut self, pcm: &[f32]) -> Vec<Range<usize>> {
+    /// The remaining chunks once `pcm` holds the whole audio, and the count of hard cuts over
+    /// all chunks.
+    pub fn finish(mut self, pcm: &[f32]) -> (Vec<Range<usize>>, usize) {
         while self.next < pcm.len() {
-            let end = cut(pcm, self.next, self.target);
-            self.held.push_back(self.next..end);
-            self.next = end;
+            self.hold_next(pcm);
         }
-        let mut ranges = Vec::from(self.held);
-        // The engine fails on a tiny chunk, so a short tail joins the previous chunk. The
-        // release rule in `ready` keeps that previous chunk here.
-        if ranges.len() > 1 && ranges.last().is_some_and(|last| last.len() < MIN_CHUNK) {
-            let tail = ranges.pop().expect("a last chunk");
-            ranges.last_mut().expect("a previous chunk").end = tail.end;
+        // The engine fails on a tiny chunk, so a short tail joins the previous chunk, and the
+        // cut between them disappears. The release rule in `ready` keeps that previous chunk here.
+        let mut held = Vec::from(self.held);
+        if held.len() > 1 && held.last().is_some_and(|(last, _)| last.len() < MIN_CHUNK) {
+            let (tail, hard) = held.pop().expect("a last chunk");
+            let previous = held.last_mut().expect("a previous chunk");
+            *previous = (previous.0.start..tail.end, hard);
         }
-        ranges
+        let hard_cuts = self.hard_cuts + held.iter().filter(|(_, hard)| *hard).count();
+        (
+            held.into_iter().map(|(range, _)| range).collect(),
+            hard_cuts,
+        )
     }
 }
 
@@ -232,7 +257,8 @@ mod tests {
     fn chooses_silence_before_target() {
         let mut pcm = vec![0.5; 70 * SAMPLE_RATE];
         pcm[55 * SAMPLE_RATE..56 * SAMPLE_RATE].fill(0.0);
-        let cuts = chunks(&pcm, 60.try_into().unwrap());
+        let (cuts, hard_cuts) = chunks_and_hard_cuts(&pcm, 60.try_into().unwrap());
+        assert_eq!(hard_cuts, 0);
         assert!((55 * SAMPLE_RATE..56 * SAMPLE_RATE).contains(&cuts[0].end));
         assert_eq!(cuts[1].start, cuts[0].end);
         assert_eq!(cuts[1].end, pcm.len());
@@ -249,9 +275,13 @@ mod tests {
         let pcm: Vec<f32> = (0..125 * SAMPLE_RATE)
             .map(|i| (i as f32 * std::f32::consts::TAU * 440.0 / SAMPLE_RATE as f32).sin())
             .collect();
+        // A pure tone has no quiet point, so both cuts are hard cuts.
         assert_eq!(
-            chunks(&pcm, 60.try_into().unwrap()),
-            vec![0..960_000, 960_000..1_920_000, 1_920_000..2_000_000]
+            chunks_and_hard_cuts(&pcm, 60.try_into().unwrap()),
+            (
+                vec![0..960_000, 960_000..1_920_000, 1_920_000..2_000_000],
+                2
+            )
         );
     }
     #[test]
@@ -260,7 +290,10 @@ mod tests {
         let pcm: Vec<f32> = (0..30 * SAMPLE_RATE + 5)
             .map(|i| (i as f32 * std::f32::consts::TAU * 440.0 / SAMPLE_RATE as f32).sin())
             .collect();
-        assert_eq!(chunks(&pcm, 30.try_into().unwrap()), vec![0..pcm.len()]);
+        // The tail join removes the only cut, a hard one.
+        let (ranges, hard_cuts) = chunks_and_hard_cuts(&pcm, 30.try_into().unwrap());
+        assert_eq!(ranges, vec![0..pcm.len()]);
+        assert_eq!(hard_cuts, 0);
         // A silence just after a chunk start must not produce a chunk shorter than MIN_CHUNK.
         let mut pcm = vec![0.5; 3 * SAMPLE_RATE];
         pcm[..480].fill(0.0);
@@ -361,7 +394,16 @@ mod tests {
         for (pcm, seconds) in cases {
             let seconds = seconds.try_into().unwrap();
             let expected = reference_chunks(&pcm, seconds);
-            assert_eq!(chunks(&pcm, seconds), expected);
+            // A hard cut ends a chunk, other than the last, at exactly the target length.
+            let target = seconds.get() as usize * SAMPLE_RATE;
+            let expected_hard_cuts = expected[..expected.len() - 1]
+                .iter()
+                .filter(|range| range.len() == target)
+                .count();
+            assert_eq!(
+                chunks_and_hard_cuts(&pcm, seconds),
+                (expected.clone(), expected_hard_cuts)
+            );
             // Grow the audio in uneven steps, like ffmpeg pipe reads.
             for step in [1_000, 16_384, 7 * SAMPLE_RATE + 11] {
                 let mut chunker = Chunker::new(seconds);
@@ -373,8 +415,10 @@ mod tests {
                     assert!(ready.iter().all(|r| r.end <= len));
                     ranges.extend(ready);
                 }
-                ranges.extend(chunker.finish(&pcm));
+                let (rest, hard_cuts) = chunker.finish(&pcm);
+                ranges.extend(rest);
                 assert_eq!(ranges, expected, "step {step}");
+                assert_eq!(hard_cuts, expected_hard_cuts, "step {step}");
             }
         }
     }
