@@ -99,7 +99,8 @@ impl Media {
     }
 }
 
-pub fn media(input: &str) -> Result<(Metadata, Pending)> {
+/// `audio_stream` counts audio streams from 0; a local file reports the duration of that stream.
+pub fn media(input: &str, audio_stream: usize) -> Result<(Metadata, Pending)> {
     if !is_url(input) {
         // `absolute` avoids the `\\?\` prefix that `canonicalize` adds on Windows.
         let path = std::path::absolute(input)?;
@@ -118,7 +119,7 @@ pub fn media(input: &str) -> Result<(Metadata, Pending)> {
                 source: path.to_string_lossy().into_owned(),
                 uploader: None,
                 upload_date: None,
-                duration: probe_duration(&path),
+                duration: probe_duration(&path, audio_stream),
                 file_size: Some(info.len()),
                 sources: Sources::Local {
                     path: path.to_string_lossy().into_owned(),
@@ -189,6 +190,9 @@ pub fn resolve(media: Pending, workspace: &Path) -> Result<Media> {
             .args([
                 "--no-playlist",
                 "--no-progress",
+                // yt-dlp skips a fragment it cannot fetch and still succeeds. The decoded audio
+                // then misses that stretch, and the duration check allows up to 1 % of slack.
+                "--abort-on-unavailable-fragments",
                 "-f",
                 "bestaudio/best",
                 // Print the final media path: a user config can add subtitles or thumbnails.
@@ -690,11 +694,12 @@ fn file_id(path: &Path, size: u64) -> Result<String> {
     Ok(format!("file:{}", &hex(&hasher.finalize())[..32]))
 }
 
-/// The audio duration a local file reports, for the truncation check. None when unknown.
-fn probe_duration(path: &Path) -> Option<f64> {
+/// The duration a local file reports for audio stream `stream`, the stream that
+/// `audio::decode_blocks` decodes, for the truncation check. None when unknown.
+fn probe_duration(path: &Path, stream: usize) -> Option<f64> {
     let output = command_output(
         Command::new("ffprobe")
-            .args(["-v", "error", "-select_streams", "a:0"])
+            .args(["-v", "error", "-select_streams", &format!("a:{stream}")])
             .args(["-show_entries", "stream=duration:format=duration"])
             .args(["-of", "default=noprint_wrappers=1:nokey=1"])
             .arg(path),
@@ -1462,5 +1467,101 @@ mod tests {
             meta.title,
             "Pi (@pidotdev): Welcome to our Monday Meditations! 🌞"
         );
+    }
+    #[test]
+    fn a_local_file_reports_the_duration_of_the_chosen_audio_stream() {
+        let dir = temp_dir("stream-duration");
+        let path = dir.join("two.mp4");
+        let status = Command::new("ffmpeg")
+            .args(["-nostdin", "-v", "error", "-y", "-f", "lavfi"])
+            .args(["-i", "sine=f=440:d=2:r=16000", "-f", "lavfi"])
+            .args(["-i", "anullsrc=cl=stereo:r=16000:d=4"])
+            .args(["-map", "0", "-map", "1", "-c:a", "aac"])
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let duration = |stream| {
+            media(path.to_str().unwrap(), stream)
+                .unwrap()
+                .0
+                .duration
+                .unwrap()
+        };
+        // AAC adds up to one 1024-sample frame of padding.
+        assert!((2.0..2.1).contains(&duration(0)), "{}", duration(0));
+        assert!((4.0..4.1).contains(&duration(1)), "{}", duration(1));
+        fs::remove_dir_all(dir).unwrap();
+    }
+    /// Serve the files of `dir` over HTTP on a local port, answering 404 for `missing`.
+    fn serve(dir: PathBuf, missing: &'static str) -> String {
+        use std::io::{BufRead, BufReader};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let mut request = String::new();
+                if BufReader::new(&stream).read_line(&mut request).is_err() {
+                    continue;
+                }
+                let name = request.split_whitespace().nth(1).unwrap_or("/");
+                let name = name.trim_start_matches('/');
+                let body = (name != missing)
+                    .then(|| fs::read(dir.join(name)).ok())
+                    .flatten();
+                let head = match &body {
+                    Some(body) => format!(
+                        "HTTP/1.0 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    ),
+                    None => {
+                        "HTTP/1.0 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                            .into()
+                    }
+                };
+                let _ = stream.write_all(head.as_bytes());
+                if !request.starts_with("HEAD")
+                    && let Some(body) = body
+                {
+                    let _ = stream.write_all(&body);
+                }
+            }
+        });
+        base
+    }
+    #[test]
+    fn a_missing_middle_fragment_fails_the_download() {
+        let dir = temp_dir("fragments");
+        // A 3 s HLS stream in 1 s fragments: seg0.ts to seg3.ts.
+        let status = Command::new("ffmpeg")
+            .args(["-nostdin", "-v", "error", "-y", "-f", "lavfi"])
+            .args(["-i", "sine=f=440:d=3:r=16000", "-c:a", "aac", "-f", "hls"])
+            .args([
+                "-hls_time",
+                "1",
+                "-hls_list_size",
+                "0",
+                "-hls_segment_filename",
+            ])
+            .arg(dir.join("seg%d.ts"))
+            .arg(dir.join("list.m3u8"))
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let download = |base: String| {
+            let workspace = temp_dir(&format!("fragments-{}", base.rsplit(':').next().unwrap()));
+            let (_, pending) = media(&format!("{base}/list.m3u8"), 0)?;
+            let result = resolve(pending, &workspace);
+            fs::remove_dir_all(workspace).unwrap();
+            result
+        };
+        // The complete stream downloads; the same stream without seg1.ts fails.
+        assert!(download(serve(dir.clone(), "")).is_ok());
+        let error = download(serve(dir.clone(), "seg1.ts"))
+            .map(|_| ())
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("fragment"), "{error:#}");
+        fs::remove_dir_all(dir).unwrap();
     }
 }

@@ -30,7 +30,7 @@ fn process(
     engine: &mut Option<engine::Engine>,
     timings: &mut timings::Timings,
 ) -> Result<std::path::PathBuf> {
-    let (meta, media) = timings.time("metadata", || fetch::media(input))?;
+    let (meta, media) = timings.time("metadata", || fetch::media(input, cli.audio_stream))?;
     let dir = output::directory(&cli.output_root()?, &meta)?;
     let index = dir.join("index.md");
     if index.exists() && !cli.force {
@@ -122,8 +122,13 @@ fn transcribe(
             }
             eprintln!("Decoding: {}", meta.title);
             let network = matches!(media, fetch::Media::Stream(_));
-            let samples =
-                audio::decode_blocks(media.input(), network, |block| sender.send(block).is_ok())?;
+            let samples = audio::decode_blocks(
+                media.input(),
+                network,
+                cli.audio_stream,
+                meta.duration,
+                |block| sender.send(block).is_ok(),
+            )?;
             let decode = start.elapsed().as_secs_f64() - download;
             anyhow::Ok((media, samples, download, decode))
         });
@@ -155,7 +160,6 @@ fn transcribe(
         timings.add("download", download);
         timings.add("decode", decode);
         anyhow::ensure!(samples == pcm.len(), "decoded samples were lost");
-        audio::check_complete(pcm.len(), meta.duration)?;
         let (rest, hard_cuts) = chunker.finish(&pcm);
         pending.extend(rest);
         transcription.hard_cuts = hard_cuts;

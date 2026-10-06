@@ -39,8 +39,14 @@ jobs:
           skill=$(sed -n 's/^  version: "\(.*\)"/\1/p' skills/scribe/SKILL.md | head -n 1)
           test "$crate" = "$skill" || { echo "skills/scribe/SKILL.md version $skill != Cargo.toml $crate"; exit 1; }
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install native build prerequisites (Linux)
+      - name: Install native build prerequisites and ffmpeg (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y cmake g++
+        run: sudo apt-get update && sudo apt-get install -y cmake g++ ffmpeg
+      # The audio tests write their fixtures with ffmpeg.
+      - name: Install ffmpeg (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+      # The fragment test downloads a local HLS stream with `uvx yt-dlp`.
+      - uses: astral-sh/setup-uv@v6
       - run: cargo build --locked
       - run: cargo test --locked

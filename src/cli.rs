@@ -33,6 +33,11 @@ pub struct Cli {
     // 30 s had the lowest word error rate in docs/adr/0003-30-second-chunks.md.
     #[arg(long, default_value = "30", value_name = "N")]
     pub chunk_secs: NonZeroU32,
+    /// Audio stream to transcribe, counted from 0 among the audio streams
+    // Probe and decode both use this stream. ffmpeg's own choice prefers the stream with the
+    // most channels, which can be a silent or dubbed track.
+    #[arg(long, default_value = "0", value_name = "N")]
+    pub audio_stream: usize,
     /// Keep downloaded media and decoded 16 kHz mono f32 audio
     #[arg(long)]
     pub keep_media: bool,

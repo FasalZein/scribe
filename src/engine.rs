@@ -2,7 +2,7 @@ use crate::{audio::SAMPLE_RATE, cli::Cli};
 use anyhow::{Context, Result};
 use std::ops::Range;
 use transcribe_cpp::{
-    DeviceType, Model, ModelOptions, RunOptions, Session, SessionOptions, TimestampKind,
+    DeviceType, Model, ModelOptions, RunOptions, Session, SessionOptions, TimestampKind, Transcript,
 };
 
 /// Chunks per engine batch. transcribe-cpp holds the features and encoder output of a whole
@@ -40,6 +40,53 @@ pub struct Transcription {
     /// Chunk cuts made at the length limit (see `audio::Chunker`), set by the caller.
     pub hard_cuts: usize,
     chunks: usize,
+}
+
+impl Transcription {
+    /// Append the words of the engine result for the chunk `range`. Blank words are dropped,
+    /// so a chunk without speech adds nothing, and audio without speech has no words and no
+    /// parts.
+    fn add(&mut self, range: &Range<usize>, result: Transcript) {
+        let timings = &mut self.timings;
+        timings.mel += f64::from(result.timings.mel_ms) / 1000.0;
+        timings.encode += f64::from(result.timings.encode_ms) / 1000.0;
+        timings.decode += f64::from(result.timings.decode_ms) / 1000.0;
+        let offset = range.start as f64 / SAMPLE_RATE as f64;
+        let words = &mut self.words;
+        let seconds = |ms: i64| offset + ms as f64 / 1000.0;
+        if !result.words.is_empty() {
+            words.extend(result.words.into_iter().filter_map(|w| {
+                let text = w.text.trim();
+                (!text.is_empty()).then(|| Word {
+                    start: seconds(w.t0_ms),
+                    end: seconds(w.t1_ms),
+                    text: text.to_owned(),
+                })
+            }));
+        } else {
+            // A model without word times: every word gets the times of its segment, or of
+            // the whole chunk without segment times. A paragraph timestamp can then be up to
+            // one segment early, as it was before word timestamps.
+            let spans: Vec<(f64, f64, String)> =
+                if result.timestamp_kind != TimestampKind::None && !result.segments.is_empty() {
+                    result
+                        .segments
+                        .into_iter()
+                        .map(|s| (seconds(s.t0_ms), seconds(s.t1_ms), s.text))
+                        .collect()
+                } else {
+                    let end = range.end as f64 / SAMPLE_RATE as f64;
+                    vec![(offset, end, result.text)]
+                };
+            for (start, end, text) in spans {
+                words.extend(text.split_whitespace().map(|text| Word {
+                    start,
+                    end,
+                    text: text.to_owned(),
+                }));
+            }
+        }
+    }
 }
 
 pub struct Engine {
@@ -129,46 +176,7 @@ impl Engine {
             let result = result.with_context(|| {
                 format!("transcription failed for chunk {}", transcription.chunks)
             })?;
-            let timings = &mut transcription.timings;
-            timings.mel += f64::from(result.timings.mel_ms) / 1000.0;
-            timings.encode += f64::from(result.timings.encode_ms) / 1000.0;
-            timings.decode += f64::from(result.timings.decode_ms) / 1000.0;
-            let offset = range.start as f64 / SAMPLE_RATE as f64;
-            let words = &mut transcription.words;
-            let seconds = |ms: i64| offset + ms as f64 / 1000.0;
-            if !result.words.is_empty() {
-                words.extend(result.words.into_iter().filter_map(|w| {
-                    let text = w.text.trim();
-                    (!text.is_empty()).then(|| Word {
-                        start: seconds(w.t0_ms),
-                        end: seconds(w.t1_ms),
-                        text: text.to_owned(),
-                    })
-                }));
-            } else {
-                // A model without word times: every word gets the times of its segment, or of
-                // the whole chunk without segment times. A paragraph timestamp can then be up to
-                // one segment early, as it was before word timestamps.
-                let spans: Vec<(f64, f64, String)> = if result.timestamp_kind != TimestampKind::None
-                    && !result.segments.is_empty()
-                {
-                    result
-                        .segments
-                        .into_iter()
-                        .map(|s| (seconds(s.t0_ms), seconds(s.t1_ms), s.text))
-                        .collect()
-                } else {
-                    let end = range.end as f64 / SAMPLE_RATE as f64;
-                    vec![(offset, end, result.text)]
-                };
-                for (start, end, text) in spans {
-                    words.extend(text.split_whitespace().map(|text| Word {
-                        start,
-                        end,
-                        text: text.to_owned(),
-                    }));
-                }
-            }
+            transcription.add(range, result);
         }
         Ok(())
     }
@@ -178,6 +186,62 @@ impl Engine {
 mod tests {
     use super::*;
     use clap::Parser;
+
+    #[test]
+    fn whitespace_engine_results_publish_zero_parts() {
+        // The three result shapes, each with only whitespace: word times, segment times, text.
+        let blank = || transcribe_cpp::Word {
+            text: " ".into(),
+            ..Default::default()
+        };
+        let results = [
+            Transcript {
+                timestamp_kind: TimestampKind::Word,
+                words: vec![blank(), blank()],
+                ..Default::default()
+            },
+            Transcript {
+                timestamp_kind: TimestampKind::Segment,
+                segments: vec![transcribe_cpp::Segment {
+                    text: " \n ".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            Transcript {
+                text: "\t ".into(),
+                ..Default::default()
+            },
+        ];
+        let mut transcription = Transcription::default();
+        for (i, result) in results.into_iter().enumerate() {
+            let start = i * 30 * SAMPLE_RATE;
+            transcription.add(&(start..start + 30 * SAMPLE_RATE), result);
+        }
+        assert!(transcription.words.is_empty());
+        let dir = std::env::temp_dir().join(format!("scribe-test-silence-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let meta = crate::fetch::Metadata {
+            id: "file:silence".into(),
+            title: "Silence".into(),
+            source: "/silence.wav".into(),
+            uploader: None,
+            upload_date: None,
+            duration: Some(90.0),
+            file_size: None,
+            sources: crate::sources::Sources::Local {
+                path: "/silence.wav".into(),
+            },
+            chapters: Vec::new(),
+        };
+        let cli = Cli::parse_from(["scribe", "x"]);
+        let index =
+            crate::output::write(&dir, &meta, &cli, 90.0, 1.0, &transcription.words, 0).unwrap();
+        let index = std::fs::read_to_string(index).unwrap();
+        assert!(index.lines().any(|line| line == "parts: 0"), "{index}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     /// Regression for a sentence that transcribe-cpp dropped from a 52.6 s chunk.
     /// The first 70 s of the source still get that chunk boundary at the old
@@ -192,7 +256,7 @@ mod tests {
         let model = std::env::var("SCRIBE_REGRESSION_MODEL")
             .unwrap_or_else(|_| crate::cli::DEFAULT_MODEL.to_owned());
         let cli = Cli::parse_from(["scribe", &media, "--model", &model]);
-        let pcm = crate::audio::decode(media.as_ref(), false, None).unwrap();
+        let pcm = crate::audio::decode(media.as_ref(), false, 0, None).unwrap();
         let pcm = &pcm[..70 * SAMPLE_RATE];
         // The default model comes from the cache, or downloads once and is verified.
         let model = crate::fetch::model(&model).unwrap();

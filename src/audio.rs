@@ -137,31 +137,117 @@ fn cut(pcm: &[f32], start: usize, target: usize) -> usize {
         hard_end
     }
 }
-/// Decode the input to 16 kHz mono f32 samples and check them against the expected duration.
+/// Decode audio stream `stream` of the input to 16 kHz mono f32 samples, with the checks of
+/// `decode_blocks`.
 #[cfg(test)]
-pub fn decode(input: &std::ffi::OsStr, network: bool, expected: Option<f64>) -> Result<Vec<f32>> {
+pub fn decode(
+    input: &std::ffi::OsStr,
+    network: bool,
+    stream: usize,
+    expected: Option<f64>,
+) -> Result<Vec<f32>> {
     let mut pcm =
         Vec::with_capacity(expected.map_or(0, |secs| (secs * SAMPLE_RATE as f64) as usize));
-    decode_blocks(input, network, |block| {
+    decode_blocks(input, network, stream, expected, |block| {
         pcm.extend_from_slice(&block);
         true
     })?;
-    check_complete(pcm.len(), expected)?;
     Ok(pcm)
 }
 
-/// Decode the input to 16 kHz mono f32 samples and pass them to `sink` in blocks while ffmpeg
-/// runs. `sink` returns false to stop ffmpeg. Returns the sample count; the caller checks it
-/// against the expected duration. Any ffmpeg error output fails the source: ffmpeg exits 0 on a
-/// truncated file or a dropped connection and only reports it on stderr.
+/// Decode audio stream `stream` of the input, counted from 0 among its audio streams, to 16 kHz
+/// mono f32 samples and pass them to `sink` in blocks while ffmpeg runs. `sink` returns false
+/// to stop ffmpeg. Then check the whole audio and return its sample count:
+/// - The audio must be about as long as `expected`, the duration the source reported.
+/// - ffmpeg exits 0 on a truncated file or a dropped connection and only reports it on stderr.
+///   So any ffmpeg error output fails a network stream or a source without a duration. A local
+///   file with a duration keeps a corrupt frame as a warning: the duration check still catches
+///   truncation.
+/// - A near-silent mix whose first channel is loud means the channels cancel out (phase-inverted
+///   stereo). That fails instead of producing an empty transcript.
+///
 /// `network` adds a stall timeout and allows only HTTPS for third-party media URLs.
 pub fn decode_blocks(
     input: &std::ffi::OsStr,
     network: bool,
+    stream: usize,
+    expected: Option<f64>,
     mut sink: impl FnMut(Vec<f32>) -> bool,
 ) -> Result<usize> {
+    let expected = expected.filter(|secs| secs.is_finite() && *secs > 0.0);
+    let strict = network || expected.is_none();
+    let mut energy = 0.0;
+    let (samples, errors) = ffmpeg(input, network, stream, strict, MIX, |block| {
+        energy += squares(&block);
+        sink(block)
+    })
+    .with_context(|| format!("cannot decode audio stream {stream}"))?;
+    check_complete(samples, expected).map_err(|error| {
+        if errors.is_empty() {
+            error
+        } else {
+            anyhow::anyhow!("{error:#}; ffmpeg reported: {errors}")
+        }
+    })?;
+    if let Some(first) = errors.lines().next() {
+        eprintln!(
+            "warning: ffmpeg reported {} error lines, but the decoded audio covers the reported \
+             duration; a corrupt frame can lose a moment of audio. First: {first}",
+            errors.lines().count()
+        );
+    }
+    let mix = (energy / samples as f64).sqrt();
+    if mix < QUIET_MIX_RMS {
+        let mut energy = 0.0;
+        let (samples, _) = ffmpeg(input, network, stream, strict, FIRST_CHANNEL, |block| {
+            energy += squares(&block);
+            true
+        })?;
+        let first = (energy / samples as f64).sqrt();
+        let dbfs = |rms: f64| 20.0 * rms.log10();
+        ensure!(
+            first < QUIET_MIX_RMS || first <= CANCEL_RATIO * mix,
+            "the channels of audio stream {stream} cancel out in the mono mix (phase-inverted \
+             stereo): first channel {:.1} dBFS, mix {:.1} dBFS. Transcribe one channel instead, \
+             for example: ffmpeg -i INPUT -map 0:a:{stream} -af pan=mono|c0=c0 channel.wav",
+            dbfs(first),
+            dbfs(mix)
+        );
+    }
+    Ok(samples)
+}
+
+/// The ffmpeg options that mix all channels to mono, as ffmpeg's channel downmix does.
+const MIX: &[&str] = &["-ac", "1"];
+/// The ffmpeg options that keep only the first channel.
+const FIRST_CHANNEL: &[&str] = &["-af", "pan=mono|c0=c0"];
+/// A mix below this RMS (-50 dBFS) gets the cancellation check. Speech sits far above it, so
+/// the extra decode pass is rare.
+const QUIET_MIX_RMS: f64 = 0.003_16;
+/// A first channel more than this many times the mix RMS (20 dB) means the channels cancel out.
+/// A mix of uncorrelated channels, or of one silent channel, loses at most 6 dB.
+const CANCEL_RATIO: f64 = 10.0;
+
+fn squares(block: &[f32]) -> f64 {
+    block.iter().map(|&x| f64::from(x).powi(2)).sum()
+}
+
+/// Run ffmpeg on audio stream `stream` with the channel options `channels`, and pass the
+/// samples to `sink`. Returns the sample count and ffmpeg's error output, which is empty when
+/// `strict`: then any error output fails.
+fn ffmpeg(
+    input: &std::ffi::OsStr,
+    network: bool,
+    stream: usize,
+    strict: bool,
+    channels: &[&str],
+    mut sink: impl FnMut(Vec<f32>) -> bool,
+) -> Result<(usize, String)> {
     let mut command = std::process::Command::new("ffmpeg");
-    command.args(["-nostdin", "-hide_banner", "-loglevel", "error", "-xerror"]);
+    command.args(["-nostdin", "-hide_banner", "-loglevel", "error"]);
+    if strict {
+        command.arg("-xerror");
+    }
     if network {
         command.args(["-rw_timeout", NETWORK_TIMEOUT_MICROS]);
         // These options also work on ffmpeg versions before 4.4. Do not reconnect at
@@ -180,7 +266,9 @@ pub fn decode_blocks(
     command
         .arg("-i")
         .arg(input)
-        .args(["-vn", "-f", "f32le", "-ac", "1", "-ar", &sample_rate, "-"])
+        .args(["-map", &format!("0:a:{stream}"), "-f", "f32le"])
+        .args(channels)
+        .args(["-ar", &sample_rate, "-"])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
@@ -231,7 +319,7 @@ pub fn decode_blocks(
     ensure!(!stopped, "decoding stopped");
     let errors = errors.trim();
     ensure!(
-        status.success() && errors.is_empty(),
+        status.success() && (errors.is_empty() || !strict),
         "ffmpeg failed ({status}): {}",
         if errors.is_empty() {
             "no error output"
@@ -242,7 +330,7 @@ pub fn decode_blocks(
     ensure!(read? == 0, "ffmpeg returned incomplete f32 samples");
     ensure!(total > 0, "media has no audio samples");
     ensure!(finite, "ffmpeg returned non-finite samples");
-    Ok(total)
+    Ok((total, errors.to_owned()))
 }
 
 /// Fail when the decoded audio is materially shorter than the duration the source reported.
@@ -497,6 +585,163 @@ mod tests {
                 assert_eq!(hard_cuts, expected_hard_cuts, "step {step}");
             }
         }
+    }
+    /// A fresh scratch folder for ffmpeg fixtures.
+    fn fixture_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("scribe-test-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+    /// Write `name` in `dir` with ffmpeg. `args` sit between the global options and the output.
+    fn fixture(dir: &std::path::Path, name: &str, args: &[&str]) -> std::path::PathBuf {
+        let path = dir.join(name);
+        let status = std::process::Command::new("ffmpeg")
+            .args(["-nostdin", "-v", "error", "-y"])
+            .args(args)
+            .arg(&path)
+            .status()
+            .expect("ffmpeg runs");
+        assert!(status.success(), "ffmpeg failed to write {name}");
+        path
+    }
+    /// Two seconds of a 440 Hz tone at 16 kHz. Its RMS is about 0.088 (amplitude 1/8).
+    const TONE: &str = "sine=f=440:d=2:r=16000";
+    fn rms(pcm: &[f32]) -> f64 {
+        (pcm.iter().map(|&x| f64::from(x).powi(2)).sum::<f64>() / pcm.len() as f64).sqrt()
+    }
+    #[test]
+    fn the_first_audio_stream_is_decoded_unless_another_is_chosen() {
+        let dir = fixture_dir("two-tracks");
+        // Tone first, stereo silence second, neither marked default. ffmpeg's own choice takes
+        // the stream with more channels, the silence (Astra review R3).
+        let media = fixture(
+            &dir,
+            "two.mkv",
+            &[
+                "-f",
+                "lavfi",
+                "-i",
+                TONE,
+                "-f",
+                "lavfi",
+                "-i",
+                "anullsrc=cl=stereo:r=16000:d=2",
+                "-map",
+                "0",
+                "-map",
+                "1",
+                "-c:a",
+                "aac",
+                "-disposition:a",
+                "0",
+            ],
+        );
+        let speech = decode(media.as_os_str(), false, 0, None).unwrap();
+        assert!(rms(&speech) > 0.05, "first stream RMS {}", rms(&speech));
+        let silence = decode(media.as_os_str(), false, 1, None).unwrap();
+        assert_eq!(rms(&silence), 0.0);
+        let error = decode(media.as_os_str(), false, 2, None).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("cannot decode audio stream 2"),
+            "{error:#}"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn phase_inverted_stereo_is_an_error_not_silence() {
+        let dir = fixture_dir("phase");
+        let media = fixture(
+            &dir,
+            "inverted.wav",
+            &[
+                "-f",
+                "lavfi",
+                "-i",
+                TONE,
+                "-af",
+                "pan=stereo|c0=c0|c1=-1*c0",
+            ],
+        );
+        let error = decode(media.as_os_str(), false, 0, Some(2.0)).unwrap_err();
+        assert!(format!("{error:#}").contains("cancel"), "{error:#}");
+        // The same tone in phase on both channels decodes.
+        let media = fixture(
+            &dir,
+            "same.wav",
+            &["-f", "lavfi", "-i", TONE, "-af", "pan=stereo|c0=c0|c1=c0"],
+        );
+        assert!(rms(&decode(media.as_os_str(), false, 0, Some(2.0)).unwrap()) > 0.05);
+        // Digital silence is not cancellation: it decodes and yields no speech later.
+        let media = fixture(
+            &dir,
+            "silence.wav",
+            &["-f", "lavfi", "-i", "anullsrc=cl=stereo:r=16000:d=2"],
+        );
+        assert_eq!(
+            rms(&decode(media.as_os_str(), false, 0, Some(2.0)).unwrap()),
+            0.0
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    /// A 4 s FLAC tone in Matroska with 40 bytes in the middle overwritten: one bad frame.
+    fn corrupt_fixture(dir: &std::path::Path) -> std::path::PathBuf {
+        let good = fixture(
+            dir,
+            "good.mkv",
+            &[
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=f=440:d=4:r=16000",
+                "-c:a",
+                "flac",
+            ],
+        );
+        let mut bytes = std::fs::read(good).unwrap();
+        let middle = bytes.len() / 2;
+        bytes[middle..middle + 40].fill(0xa5);
+        let path = dir.join("corrupt.mkv");
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+    #[test]
+    fn one_corrupt_frame_in_a_local_file_is_a_warning() {
+        let dir = fixture_dir("corrupt");
+        let media = corrupt_fixture(&dir);
+        let pcm = decode(media.as_os_str(), false, 0, Some(4.0)).unwrap();
+        // At most a frame or two is lost.
+        assert!(pcm.len() as f64 / SAMPLE_RATE as f64 > 3.0);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn corrupt_frames_still_fail_without_a_known_duration_and_truncation_fails() {
+        let dir = fixture_dir("truncated");
+        // Without a duration, only ffmpeg errors can reveal lost audio.
+        let media = corrupt_fixture(&dir);
+        assert!(decode(media.as_os_str(), false, 0, None).is_err());
+        // ffmpeg exits 0 on a file cut in half; the duration check catches it.
+        let whole = fixture(
+            &dir,
+            "whole.mkv",
+            &[
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=f=440:d=20:r=16000",
+                "-c:a",
+                "flac",
+            ],
+        );
+        let bytes = std::fs::read(whole).unwrap();
+        let cut = dir.join("cut.mkv");
+        std::fs::write(&cut, &bytes[..bytes.len() / 2]).unwrap();
+        let error = decode(cut.as_os_str(), false, 0, Some(20.0)).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("decoded audio is incomplete"),
+            "{error:#}"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
     #[test]
     fn short_audio_is_one_chunk() {

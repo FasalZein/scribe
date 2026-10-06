@@ -67,6 +67,7 @@ scribe [OPTIONS] <INPUT>...
 -m, --model PATH|URL   GGUF model path or URL
 -l, --language CODE    Language hint passed to the engine
     --chunk-secs N     Positive target chunk length in seconds (default 30)
+    --audio-stream N   Audio stream to transcribe, counted from 0 (default 0, the first)
     --keep-media       Keep downloaded media and decoded audio
     --backend NAME     auto|cpu|metal|vulkan|cuda (default auto)
     --threads N        CPU threads for the engine; 0 picks per backend (default 0)
@@ -78,6 +79,8 @@ scribe [OPTIONS] <INPUT>...
 - Inputs run in order. stdout prints one absolute `index.md` path per input that succeeded or was skipped. Progress and errors go to stderr.
 - A failed input does not stop the others; scribe exits non-zero at the end. A model-load failure stops the run.
 - An input that already has an `index.md` is skipped and its path is still printed. scribe finds the folder by a stable **source ID** (X status ID, yt-dlp extractor and ID, or a content hash of a local file), so re-running a list is safe. `--force` redoes the transcript and keeps `lessons.md`.
+- scribe transcribes one audio stream: the first, or the one `--audio-stream N` names. The duration check and the decode use that same stream. ffmpeg's own choice would take the stream with the most channels, which can be a dub or a silent track.
+- A source fails when its decoded audio is materially shorter than its reported duration, when yt-dlp cannot fetch a fragment, or when the stereo channels cancel out in the mono mix (phase-inverted stereo). The cancellation error names an ffmpeg command that extracts one channel. A local or downloaded file with a known duration keeps a corrupt frame as a stderr warning; a stream or a file without a duration fails on any ffmpeg error.
 - `--backend auto` lets the engine choose. An explicit backend does not fall back; it must be compiled in and available.
 - `--threads 0` uses 1 CPU thread on a GPU backend, where only the decoder runs on the CPU, and the engine default (up to 8) on the CPU backend, where the threads also run the encoder. More decoder threads stall on a busy machine ([ADR 0006](docs/adr/0006-decoder-threads.md)).
 
