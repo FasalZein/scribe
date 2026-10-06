@@ -1,4 +1,4 @@
-use clap::{Parser, ValueEnum};
+use clap::{Parser, Subcommand, ValueEnum};
 use std::{num::NonZeroU32, path::PathBuf};
 
 /// Pinned to a Hugging Face commit, so the fixed size and SHA-256 in fetch.rs stay valid.
@@ -7,9 +7,12 @@ pub const DEFAULT_MODEL: &str = "https://huggingface.co/handy-computer/parakeet-
 #[derive(Parser)]
 #[command(
     version,
-    about = "Turn video URLs or local media into timestamped transcripts"
+    about = "Turn video URLs or local media into timestamped transcripts",
+    subcommand_negates_reqs = true
 )]
 pub struct Cli {
+    #[command(subcommand)]
+    pub command: Option<Command>,
     /// URL or local media file path; processed in order
     #[arg(required = true, value_name = "INPUT")]
     pub inputs: Vec<String>,
@@ -44,6 +47,23 @@ pub struct Cli {
     /// Print per-stage wall times on stderr
     #[arg(long)]
     pub timings: bool,
+}
+
+#[derive(Subcommand)]
+pub enum Command {
+    /// Validate or finalize a format 2 lessons file (no model needed)
+    Lessons {
+        #[command(subcommand)]
+        action: LessonsAction,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum LessonsAction {
+    /// Validate lesson counts, anchors, kinds, topics and citations
+    Check { file: PathBuf },
+    /// Write the lesson count and topic list after validating lessons
+    Finalize { file: PathBuf },
 }
 
 #[derive(Clone, Copy, ValueEnum)]

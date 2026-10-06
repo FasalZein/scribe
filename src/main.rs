@@ -2,6 +2,7 @@ mod audio;
 mod cli;
 mod engine;
 mod fetch;
+mod lessons;
 mod output;
 mod parts;
 mod sources;
@@ -163,6 +164,13 @@ fn transcribe(
 }
 
 fn run(cli: Cli) -> Result<bool> {
+    if let Some(cli::Command::Lessons { action }) = &cli.command {
+        match action {
+            cli::LessonsAction::Check { file } => lessons::check(file)?,
+            cli::LessonsAction::Finalize { file } => lessons::finalize(file)?,
+        }
+        return Ok(false);
+    }
     let mut engine = None;
     let mut failed = false;
     for input in &cli.inputs {
