@@ -12,9 +12,12 @@ pub struct Cli {
     /// URL or local media file path; processed in order
     #[arg(required = true, value_name = "INPUT")]
     pub inputs: Vec<String>,
-    /// Output root
-    #[arg(short, long, default_value = "./scribe-out", value_name = "DIR")]
-    pub out: PathBuf,
+    /// Output root (default: $SCRIBE_LIBRARY/sources or ~/Knowledge/scribe/sources)
+    #[arg(short, long, value_name = "DIR")]
+    pub out: Option<PathBuf>,
+    /// Redo existing transcripts, preserving lessons.md
+    #[arg(long)]
+    pub force: bool,
     /// GGUF model path or URL
     #[arg(short, long, default_value = DEFAULT_MODEL, value_name = "PATH|URL")]
     pub model: String,
@@ -49,5 +52,22 @@ impl From<Backend> for transcribe_cpp::Backend {
             Backend::Vulkan => Self::Vulkan,
             Backend::Cuda => Self::Cuda,
         }
+    }
+}
+
+impl Cli {
+    pub fn output_root(&self) -> anyhow::Result<PathBuf> {
+        if let Some(root) = &self.out {
+            return Ok(root.clone());
+        }
+        let library = match std::env::var_os("SCRIBE_LIBRARY") {
+            Some(root) => PathBuf::from(root),
+            None => dirs::home_dir()
+                .ok_or_else(|| {
+                    anyhow::anyhow!("home directory is unavailable; set SCRIBE_LIBRARY or --out")
+                })?
+                .join("Knowledge/scribe"),
+        };
+        Ok(library.join("sources"))
     }
 }

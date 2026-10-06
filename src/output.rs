@@ -1,5 +1,5 @@
 use crate::{cli::Cli, engine::Segment, fetch::Metadata};
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result};
 use std::{
     fs,
     io::{BufWriter, Write},
@@ -44,12 +44,7 @@ pub fn directory(root: &Path, meta: &Metadata) -> Result<PathBuf> {
         .map(str::to_owned)
         .unwrap_or_else(today);
     let dir = root.join(format!("{date}-{}", slug(&meta.title)));
-    ensure!(
-        !dir.exists(),
-        "output directory already exists: {}; choose another --out to avoid overwriting",
-        dir.display()
-    );
-    fs::create_dir(&dir)?;
+    fs::create_dir_all(&dir)?;
     fs::canonicalize(dir).context("cannot resolve output directory")
 }
 
@@ -61,6 +56,17 @@ pub fn write(
     engine_secs: f64,
     segments: &[Segment],
 ) -> Result<PathBuf> {
+    // Remove the completion marker before replacing transcript files. Keep agent-written lessons.
+    let index = dir.join("index.md");
+    if index.exists() {
+        fs::remove_file(&index)?;
+    }
+    let parts_dir = dir.join("parts");
+    if parts_dir.exists() {
+        fs::remove_dir_all(&parts_dir)?;
+    }
+    fs::create_dir(&parts_dir)?;
+    let parts = crate::parts::split(segments, &meta.chapters);
     let mut frontmatter = serde_json::json!({
         "title": meta.title, "source": meta.source, "uploader": meta.uploader,
         "upload_date": meta.upload_date, "duration_secs": duration, "model": cli.model,
@@ -104,5 +110,72 @@ pub fn write(
     markdown.flush()?;
     jsonl.flush()?;
     fs::write(dir.join("meta.json"), serde_json::to_vec_pretty(meta)?)?;
-    Ok(path)
+    frontmatter["parts"] = parts.len().into();
+    let words: usize = parts.iter().map(crate::parts::Part::words).sum();
+    frontmatter["words"] = words.into();
+    frontmatter["tokens_estimate"] = crate::parts::tokens_estimate(words).into();
+    let mut entry = String::from("---\n");
+    for (key, value) in frontmatter
+        .as_object()
+        .context("frontmatter is not an object")?
+    {
+        entry.push_str(&format!("{key}: {value}\n"));
+    }
+    entry.push_str(&format!(
+        "---\n\n# {}\n\n",
+        meta.title.replace(['\r', '\n'], " ")
+    ));
+    entry.push_str(&crate::sources::render(&meta.sources, &meta.chapters));
+    entry.push_str("## Parts\n\n| part | time range | words | tokens_estimate | first words |\n| --- | --- | ---: | ---: | --- |\n");
+    for (i, part) in parts.iter().enumerate() {
+        // A Part always holds at least one segment, as constructed by split.
+        let first = part.segments.first().context("empty part")?;
+        let last = part.segments.last().context("empty part")?;
+        let time_range = format!(
+            "[{}–{}]",
+            crate::sources::timestamp(first.start),
+            crate::sources::timestamp(last.end)
+        );
+        let preview = part
+            .segments
+            .iter()
+            .flat_map(|s| s.text.split_whitespace())
+            .take(12)
+            .collect::<Vec<_>>()
+            .join(" ");
+        let title = part.chapter.map(|c| c.title.as_str()).unwrap_or(&preview);
+        let piece = part.piece.map(|c| format!("-{c}")).unwrap_or_default();
+        let filename = format!("{:02}-{}{piece}.md", i + 1, slug(title));
+        let mut body = format!(
+            "# {}\n\nPart {} of {} · {}\n\n",
+            meta.title.replace(['\r', '\n'], " "),
+            i + 1,
+            parts.len(),
+            time_range
+        );
+        if let Some(chapter) = part.chapter {
+            body.push_str(&format!(
+                "Chapter: {}\n\n",
+                chapter.title.replace(['\r', '\n'], " ")
+            ));
+        }
+        for segment in part.segments {
+            body.push_str(&format!(
+                "[{}] {}\n\n",
+                crate::sources::timestamp(segment.start),
+                segment.text.replace(['\r', '\n'], " ")
+            ));
+        }
+        fs::write(parts_dir.join(&filename), body)?;
+        entry.push_str(&format!(
+            "| [{:02}](parts/{filename}) | {time_range} | {} | {} | {} |\n",
+            i + 1,
+            part.words(),
+            crate::parts::tokens_estimate(part.words()),
+            preview.replace('|', "\\|")
+        ));
+    }
+    // Write the index last so an incomplete run cannot be mistaken for a completed transcript.
+    fs::write(&index, entry)?;
+    Ok(index)
 }

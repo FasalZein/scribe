@@ -72,7 +72,8 @@ Options:
 
 ```text
 scribe [OPTIONS] <INPUT>...
--o, --out DIR          Output root (default ./scribe-out)
+-o, --out DIR          Output root (default $SCRIBE_LIBRARY/sources)
+    --force            Redo an existing transcript; keeps lessons.md
 -m, --model PATH|URL   GGUF model path or URL
 -l, --language CODE    Language hint passed to the engine
     --chunk-secs N     Positive target chunk length in seconds (default 60)
@@ -98,14 +99,28 @@ language support to a model.
 
 ## Output and processing
 
-Inputs run in order. Standard output contains only absolute `transcript.md` paths,
-one per successful input. Progress and errors go to standard error. If any input
-fails, scribe continues with the remaining inputs and exits non-zero. A model-load
-failure stops the run because all inputs depend on that model.
+Inputs run in order. Standard output contains only absolute `index.md` paths,
+one per successful or skipped input. Progress and errors go to standard error. If
+any input fails, scribe continues with the remaining inputs and exits non-zero. A
+model-load failure stops the run because all later inputs depend on that model.
+scribe loads the model only when the first input needs transcription.
 
-Each input creates `<out>/<YYYYMMDD>-<title-slug>/`:
+### Library
 
-- `transcript.md`: YAML frontmatter, title, Sources, optional Chapters, and
+Without `-o`, scribe writes into the library at `$SCRIBE_LIBRARY/sources`.
+`SCRIBE_LIBRARY` defaults to `~/Knowledge/scribe`. With `-o DIR`, `DIR` is the
+root that receives the transcript folders. scribe creates missing directories.
+
+Each input creates `<root>/<YYYYMMDD>-<title-slug>/`:
+
+- `index.md`: the entry file. YAML frontmatter (the `transcript.md` fields plus
+  `parts`, `words` and `tokens_estimate`), title, Sources, optional Chapters, and
+  a `## Parts` table. Each row has the part link, the time range, words,
+  `tokens_estimate`, and the first 12 words of the part.
+- `parts/NN-<part-slug>.md`: the transcript in parts, numbered from `01`. Each
+  part has the source title, `Part N of M`, the time range `[hh:mm:ss–hh:mm:ss]`,
+  the chapter title if any, and then its `[hh:mm:ss] text` paragraphs.
+- `transcript.md`: YAML frontmatter, title, Sources, optional Chapters, and all
   timestamped paragraphs.
 - `segments.jsonl`: `{"start":0.0,"end":60.0,"text":"..."}` rows, in seconds.
 - `meta.json`: the metadata subset used, including structured `sources` and
@@ -114,11 +129,25 @@ Each input creates `<out>/<YYYYMMDD>-<title-slug>/`:
   for yt-dlp URL inputs, the downloaded `media.<extension>`. X API streams do
   not create a downloaded media file, even with `--keep-media`.
 
+Parts follow the source's chapters when it has any. A part holds whole engine
+segments, assigned to the chapter that holds the segment midpoint. A chapter that holds no segment midpoint, such as a short silent intro, gets no part. A chapter longer
+than about 2,500 words continues in more parts, named `NN-<chapter>-a`,
+`NN-<chapter>-b`, and so on. Without chapters, a part ends at the first segment
+boundary after it reaches 2,500 words, so a part can be slightly longer. The part
+slug is the chapter title, or the first words of the part. `tokens_estimate` is
+`round(words × 1.33)`, a rough size estimate for English text, not a tokenizer
+count. `words` counts whitespace-separated words of the transcript text.
+
 The date comes from the upload date, or today's UTC date when absent. The title
-slug has at most 60 characters. Existing output directories cause a clear error
-instead of overwriting transcripts. Choose another output root for repeated runs
-or colliding titles. A failed transcription can leave an incomplete output
-directory. Temporary downloads are removed on normal success or error; an abrupt
+slug has at most 60 characters. If `<folder>/index.md` already exists, scribe
+skips that input before it downloads or transcribes media. It logs
+`skip: <path> exists (use --force)` and still prints the index path. For URLs,
+the folder name comes from metadata, so the skip check still fetches metadata.
+`--force` replaces the index, parts, transcript, segments and metadata, and
+keeps `lessons.md` and other files in the folder. Two sources with the same date
+and title slug share a folder; the second one is skipped. scribe writes
+`index.md` last, so a failed transcription leaves no index and the next run
+redoes it. Temporary downloads are removed on normal success or error; an abrupt
 process termination can leave a temporary directory.
 
 ### X API and source references
@@ -178,6 +207,7 @@ cargo fmt --check
 
 Unit tests exercise silence boundaries, pure-tone hard boundaries, shorter final
 chunks, short audio, X URL detection, MP4 selection, source link extraction,
-metadata, and Sources/Chapters rendering. Trimmed real API and yt-dlp JSON lives
+metadata, Sources/Chapters rendering, and splitting into parts (chapters,
+oversized chapters, word limit, short and empty transcripts, no lost segments). Trimmed real API and yt-dlp JSON lives
 under `tests/fixtures/`; tests also construct small edge cases. CI builds and tests on macOS (Metal) and Ubuntu (CPU).
 The unit tests do not require a model or external media tools.

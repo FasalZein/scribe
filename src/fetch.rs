@@ -67,6 +67,11 @@ pub enum Media {
     File(PathBuf),
     Stream(String),
 }
+/// Media known after the metadata fetch. A yt-dlp page still needs a download.
+pub enum Pending {
+    Ready(Media),
+    YtDlp(String),
+}
 impl Media {
     pub fn input(&self) -> &std::ffi::OsStr {
         match self {
@@ -76,7 +81,7 @@ impl Media {
     }
 }
 
-pub fn media(input: &str, workspace: &Path) -> Result<(Metadata, Media)> {
+pub fn media(input: &str) -> Result<(Metadata, Pending)> {
     if !is_url(input) {
         let path =
             fs::canonicalize(input).with_context(|| format!("cannot open local media {input}"))?;
@@ -100,7 +105,7 @@ pub fn media(input: &str, workspace: &Path) -> Result<(Metadata, Media)> {
                 },
                 chapters: Vec::new(),
             },
-            Media::File(path),
+            Pending::Ready(Media::File(path)),
         ));
     }
     if crate::sources::is_x_post(input) {
@@ -145,7 +150,16 @@ pub fn media(input: &str, workspace: &Path) -> Result<(Metadata, Media)> {
             })
             .collect(),
     };
-    eprintln!("Downloading media: {}", meta.title);
+    Ok((meta, Pending::YtDlp(input.to_owned())))
+}
+
+/// Resolve media only after the existing index check.
+pub fn resolve(media: Pending, workspace: &Path) -> Result<Media> {
+    let input = match media {
+        Pending::Ready(media) => return Ok(media),
+        Pending::YtDlp(input) => input,
+    };
+    eprintln!("Downloading media: {input}");
     command_output(
         yt_dlp()?
             .args([
@@ -156,7 +170,7 @@ pub fn media(input: &str, workspace: &Path) -> Result<(Metadata, Media)> {
                 "-o",
             ])
             .arg(workspace.join("media.%(ext)s"))
-            .args(["--", input]),
+            .args(["--", &input]),
         "yt-dlp",
     )?;
     let files: Vec<_> = fs::read_dir(workspace)?.collect::<std::io::Result<Vec<_>>>()?;
@@ -169,7 +183,7 @@ pub fn media(input: &str, workspace: &Path) -> Result<(Metadata, Media)> {
                     .is_some_and(|ext| ext != "part" && ext != "ytdl")
         })
         .context("yt-dlp did not produce a media file")?;
-    Ok((meta, Media::File(path)))
+    Ok(Media::File(path))
 }
 
 pub fn model(input: &str) -> Result<PathBuf> {
@@ -334,7 +348,7 @@ enum XError {
     Fallback(anyhow::Error),
 }
 
-fn x_media(input: &str) -> std::result::Result<(Metadata, Media), XError> {
+fn x_media(input: &str) -> std::result::Result<(Metadata, Pending), XError> {
     let base = std::env::var("X_API_BASE").unwrap_or_else(|_| "https://x.pcstyle.dev".into());
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(15))
@@ -374,8 +388,7 @@ fn x_media(input: &str) -> std::result::Result<(Metadata, Media), XError> {
     let variant = crate::sources::mp4_variant(post)
         .map_err(XError::Fallback)?
         .ok_or_else(|| XError::Fatal(anyhow::anyhow!("X post has no video or GIF")))?;
-    eprintln!("Streaming X API video directly through ffmpeg (lowest-bitrate mp4)");
-    Ok((meta, Media::Stream(variant.to_owned())))
+    Ok((meta, Pending::Ready(Media::Stream(variant.to_owned()))))
 }
 
 fn x_metadata(post: &serde_json::Value, raw: &serde_json::Value) -> Result<Metadata> {

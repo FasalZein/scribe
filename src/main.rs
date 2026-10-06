@@ -3,6 +3,7 @@ mod cli;
 mod engine;
 mod fetch;
 mod output;
+mod parts;
 mod sources;
 
 use anyhow::{Context, Result};
@@ -10,15 +11,47 @@ use clap::Parser;
 use cli::Cli;
 use std::{fs, time::Instant};
 
-fn process(input: &str, cli: &Cli, engine: &mut engine::Engine) -> Result<std::path::PathBuf> {
+/// Marks errors that stop the run, because every later input needs the same model.
+#[derive(Debug)]
+struct ModelLoadFailed;
+impl std::fmt::Display for ModelLoadFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("model load failed")
+    }
+}
+
+fn process(
+    input: &str,
+    cli: &Cli,
+    engine: &mut Option<engine::Engine>,
+) -> Result<std::path::PathBuf> {
+    let (meta, media) = fetch::media(input)?;
+    let dir = output::directory(&cli.output_root()?, &meta)?;
+    let index = dir.join("index.md");
+    if index.exists() && !cli.force {
+        eprintln!("skip: {} exists (use --force)", index.display());
+        return Ok(index);
+    }
     let workspace = fetch::Workspace::new()?;
-    let (meta, media) = fetch::media(input, &workspace.0)?;
+    let media = fetch::resolve(media, &workspace.0)?;
+    if let fetch::Media::Stream(_) = &media {
+        eprintln!("Streaming X API video directly through ffmpeg (lowest-bitrate mp4)");
+    }
+    if engine.is_none() {
+        // Load lazily so that skipped inputs never pay for the model.
+        let loaded = fetch::model(&cli.model)
+            .and_then(|model| engine::Engine::load(&model, cli))
+            .context(ModelLoadFailed)?;
+        *engine = Some(loaded);
+    }
     eprintln!("Decoding: {}", meta.title);
     let (pcm, bytes) = audio::decode(media.input())?;
     let duration = pcm.len() as f64 / audio::SAMPLE_RATE as f64;
-    let dir = output::directory(&cli.out, &meta)?;
     let start = Instant::now();
-    let segments = engine.transcribe(&pcm, cli.chunk_secs)?;
+    let segments = engine
+        .as_mut()
+        .context("engine was not loaded")?
+        .transcribe(&pcm, cli.chunk_secs)?;
     let engine_secs = start.elapsed().as_secs_f64();
     eprintln!("Transcribed {:.1}s of audio in {engine_secs:.2}s", duration);
     if cli.keep_media {
@@ -33,12 +66,12 @@ fn process(input: &str, cli: &Cli, engine: &mut engine::Engine) -> Result<std::p
     output::write(&dir, &meta, cli, duration, engine_secs, &segments)
 }
 fn run(cli: Cli) -> Result<bool> {
-    let model = fetch::model(&cli.model)?;
-    let mut engine = engine::Engine::load(&model, &cli)?;
+    let mut engine = None;
     let mut failed = false;
     for input in &cli.inputs {
         match process(input, &cli, &mut engine) {
             Ok(path) => println!("{}", path.display()),
+            Err(error) if error.downcast_ref::<ModelLoadFailed>().is_some() => return Err(error),
             Err(error) => {
                 eprintln!("scribe: {input}: {error:#}");
                 failed = true;
