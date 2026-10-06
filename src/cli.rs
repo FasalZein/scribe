@@ -36,6 +36,11 @@ pub struct Cli {
     /// Compute backend (explicit selections do not fall back)
     #[arg(long, value_enum, default_value = "auto", value_name = "NAME")]
     pub backend: Backend,
+    /// CPU threads for the engine; 0 picks a default per backend
+    // On a GPU backend only the TDT decoder runs on the CPU; on the CPU backend this
+    // also sets the encoder threads. See docs/adr/0006-decoder-threads.md.
+    #[arg(long, default_value = "0", value_name = "N")]
+    pub threads: u16,
     /// Print per-stage wall times on stderr
     #[arg(long)]
     pub timings: bool,

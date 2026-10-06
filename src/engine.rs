@@ -2,13 +2,20 @@ use crate::{audio::SAMPLE_RATE, cli::Cli};
 use anyhow::{Context, Result};
 use serde::Serialize;
 use std::ops::Range;
-use transcribe_cpp::{Model, ModelOptions, RunOptions, Session, TimestampKind};
+use transcribe_cpp::{
+    DeviceType, Model, ModelOptions, RunOptions, Session, SessionOptions, TimestampKind,
+};
 
 /// Chunks per engine batch. transcribe-cpp holds the features and encoder output of a whole
 /// batch, so one batch over all chunks grows memory with the source length. On the 27:26 talk
 /// (M4 Pro, Metal, busy host) peak memory was 1.28 GB at 8, 1.42 GB at 16 and 1.53 GB at 32
 /// chunks against 1.95 GB for one batch; engine time stayed within run-to-run noise.
 pub const BATCH_CHUNKS: usize = 16;
+
+/// CPU threads for a GPU backend, where only the TDT decoder uses them. The decoder runs
+/// two tiny graphs per step, and its workers sync at a barrier after every node, so on a
+/// loaded host one parked worker stalls every step. Measurements: docs/adr/0006-decoder-threads.md.
+const GPU_DECODER_THREADS: i32 = 1;
 
 #[derive(Serialize)]
 pub struct Segment {
@@ -48,7 +55,24 @@ impl Engine {
                 ..Default::default()
             },
         )?;
-        eprintln!("Model loaded; backend: {}", model.backend());
+        // 0 keeps the library default (min(8, CPUs)), which the CPU backend needs for its encoder.
+        let on_gpu = model
+            .device()
+            .is_ok_and(|device| matches!(device.device_type, DeviceType::Gpu | DeviceType::Igpu));
+        let n_threads = match cli.threads {
+            0 if on_gpu => GPU_DECODER_THREADS,
+            0 => 0,
+            threads => i32::from(threads),
+        };
+        eprintln!(
+            "Model loaded; backend: {}; threads: {}",
+            model.backend(),
+            if n_threads == 0 {
+                "default".to_owned()
+            } else {
+                n_threads.to_string()
+            }
+        );
         let capabilities = model.capabilities();
         let timestamps = if capabilities.max_timestamp_kind == TimestampKind::None {
             TimestampKind::None
@@ -61,7 +85,10 @@ impl Engine {
             ..Default::default()
         };
         Ok(Self {
-            session: model.session()?,
+            session: model.session_with(&SessionOptions {
+                n_threads,
+                ..Default::default()
+            })?,
             options,
         })
     }

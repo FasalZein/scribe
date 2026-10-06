@@ -68,6 +68,7 @@ scribe [OPTIONS] <INPUT>...
     --chunk-secs N     Positive target chunk length in seconds (default 30)
     --keep-media       Keep downloaded media and decoded audio
     --backend NAME     auto|cpu|metal|vulkan|cuda (default auto)
+    --threads N        CPU threads for the engine; 0 picks per backend (default 0)
     --timings          Print per-stage wall times on stderr
 -h, --help
 -V, --version
@@ -77,6 +78,7 @@ scribe [OPTIONS] <INPUT>...
 - A failed input does not stop the others; scribe exits non-zero at the end. A model-load failure stops the run.
 - An input that already has an `index.md` is skipped and its path is still printed. scribe finds the folder by a stable **source ID** (X status ID, yt-dlp extractor and ID, or a content hash of a local file), so re-running a list is safe. `--force` redoes the transcript and keeps `lessons.md`.
 - `--backend auto` lets the engine choose. An explicit backend does not fall back; it must be compiled in and available.
+- `--threads 0` uses 1 CPU thread on a GPU backend, where only the decoder runs on the CPU, and the engine default (up to 8) on the CPU backend, where the threads also run the encoder. More decoder threads stall on a busy machine ([ADR 0006](docs/adr/0006-decoder-threads.md)).
 
 Environment variables:
 
@@ -87,7 +89,7 @@ Environment variables:
 | `X_API_BASE` | X API origin (default `https://x.pcstyle.dev`) |
 | `X_MD_API_KEY` | Optional X API token, sent as `Authorization: Bearer <key>` and never logged |
 
-scribe runs `uvx yt-dlp@latest` when `uvx` is on PATH, and plain `yt-dlp` otherwise. It inherits yt-dlp's configuration, so put cookies for sites that need a login there.
+scribe runs `uvx yt-dlp` (the cached version) when `uvx` is on PATH, and plain `yt-dlp` otherwise. When the cached version fails, scribe retries the call once with `uvx yt-dlp@latest`. It inherits yt-dlp's configuration, so put cookies for sites that need a login there.
 
 ## Library layout
 
@@ -152,7 +154,7 @@ A local build tunes ggml for the build machine's CPU. The release binaries and `
 
 | Symptom | Cause and fix |
 |---|---|
-| YouTube download fails with `HTTP Error 403` | YouTube blocks some requests and old yt-dlp extractors. Install uv so scribe runs `uvx yt-dlp@latest`, or update yt-dlp. Then run scribe again on that source; a retry often succeeds. Some videos also need a JavaScript runtime such as Deno; scribe enables `~/.deno/bin/deno` when it exists. |
+| YouTube download fails with `HTTP Error 403` | YouTube blocks some requests and old yt-dlp extractors. Install uv so scribe can retry with `uvx yt-dlp@latest`, or update yt-dlp. Then run scribe again on that source; a retry often succeeds. Some videos also need a JavaScript runtime such as Deno; scribe enables `~/.deno/bin/deno` when it exists. |
 | The first run on a Mac spends 15-20 s in model load | macOS rebuilds its Metal shader cache (`$(getconf DARWIN_USER_CACHE_DIR)com.apple.metal`). Later loads take about 0.2 s. `--timings` shows the `model` stage. |
 | `ffprobe` not found, or a warning that the duration is unknown | Install ffmpeg with ffprobe. scribe reads local file durations with ffprobe to detect truncated files. |
 | `scribe: command not found` after install | Add the install directory to PATH: `export PATH="$HOME/.local/bin:$PATH"`. The installer prints this hint. |

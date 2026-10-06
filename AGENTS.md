@@ -19,5 +19,6 @@ Rust CLI (`src/`) plus the agent skill in `skills/scribe/` (`SKILL.md`, `referen
 - The default chunk is 30 s on purpose: transcribe-cpp's Parakeet drops whole sentences from chunks near 60 s (ADR 0003).
 - Word count alone does not prove accuracy. Compare against a reference transcript, as in ADR 0003.
 - A cold Metal model load takes about 17 s instead of 0.2 s, because macOS shares and rebuilds its Metal shader cache. Discard the first run in a benchmark.
-- YouTube returns HTTP 403 now and then. Retry once with `uvx yt-dlp@latest` before you treat it as a bug; exclude such runs from benchmarks.
+- YouTube returns HTTP 403 now and then. scribe retries a failed cached `uvx yt-dlp` call once with `uvx yt-dlp@latest`; if that also fails, run scribe again before you treat it as a bug. Exclude such runs from benchmarks.
+- Benchmark decoder speed under a controlled load (busy loops), not on whatever the host runs: 8 decoder threads stall when the host is busy (ADR 0006).
 - Builds for other machines need `TRANSCRIBE_CMAKE_ARGS=-DGGML_NATIVE=OFF` (CI and release set it). A native build fails with GCC 12 in an OrbStack arm64 VM.
