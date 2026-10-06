@@ -1,0 +1,25 @@
+[package]
+name = "scribe"
+version = "0.1.0"
+edition = "2024"
+description = "Turn media files and video URLs into timestamped transcripts"
+license = "MIT"
+
+[features]
+vulkan = ["transcribe-cpp/vulkan"]
+cuda = ["transcribe-cpp/cuda"]
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "6"
+ureq = "2"
+time = { version = "0.3", features = ["formatting"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+transcribe-cpp = { version = "=0.3.1", default-features = false, features = ["metal"] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+transcribe-cpp = { version = "=0.3.1", default-features = false }
