@@ -2,7 +2,7 @@
 name: scribe
 description: Transcribe videos and extract lessons into the knowledge library. Use when given an X post, YouTube or other video or podcast URL, or a local media file to learn from; when queuing many sources, a playlist or a channel; or when merging lessons into topic notes.
 metadata:
-  version: "0.1.0"
+  version: "0.2.0"
 allowed-tools:
   - Bash(scribe *)
   - Bash(sh scripts/install.sh)
