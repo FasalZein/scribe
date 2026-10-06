@@ -10,8 +10,7 @@ impl log::Log for EngineLogger {
     fn log(&self, record: &log::Record<'_>) {
         if self.enabled(record.metadata()) {
             // Logging must not panic across the native callback if stderr is closed.
-            use std::io::Write;
-            let _ = writeln!(std::io::stderr().lock(), "{}", record.args());
+            crate::progress::line!("{}", record.args());
         }
     }
 

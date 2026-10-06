@@ -119,7 +119,7 @@ impl Engine {
             0 => 0,
             threads => i32::from(threads),
         };
-        eprintln!(
+        crate::progress::line!(
             "Model loaded; backend: {}; threads: {}",
             model.backend(),
             if n_threads == 0 {

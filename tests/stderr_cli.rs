@@ -9,6 +9,8 @@ fn source_failure_keeps_the_skill_error_line() {
         .output()
         .unwrap();
     assert!(!output.status.success());
+    assert!(!output.stderr.contains(&b'\r'));
+    assert!(!output.stderr.contains(&0x1b));
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert_eq!(stderr.lines().count(), 1, "{stderr}");
     assert!(
@@ -54,6 +56,8 @@ fn local_source_is_quiet_by_default_and_verbose_restores_engine_logs() {
         let output = command.output().unwrap();
         let stderr = String::from_utf8(output.stderr).unwrap();
         assert!(output.status.success(), "{stderr}");
+        assert!(!stderr.contains('\r'), "{stderr}");
+        assert!(!stderr.contains('\x1b'), "{stderr}");
         let engine_lines = stderr.lines().any(|line| {
             line.contains("ggml_") || line.contains("parakeet:") || line.contains("decoder:")
         });

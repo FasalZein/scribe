@@ -9,6 +9,7 @@ mod logging;
 mod low_confidence;
 mod output;
 mod parts;
+mod progress;
 mod sources;
 mod spool;
 mod timings;
@@ -17,7 +18,8 @@ mod topics;
 use anyhow::{Context, Result};
 use clap::Parser;
 use cli::Cli;
-use std::{fs, time::Instant};
+use progress::Stage;
+use std::{fs, io::IsTerminal, time::Instant};
 
 /// Marks errors that stop the run, because every later input needs the same model.
 #[derive(Debug)]
@@ -35,11 +37,13 @@ fn process(
     loader: &mut Option<Loader>,
     timings: &mut timings::Timings,
 ) -> Result<std::path::PathBuf> {
+    let progress = progress::Progress::new(input);
+    let terminal = std::io::stderr().is_terminal();
     let (meta, media) = timings.time("metadata", || fetch::media(input, cli.audio_stream))?;
     let dir = output::directory(&cli.output_root()?, &meta)?;
     let index = dir.join("index.md");
     if index.exists() && !cli.force {
-        eprintln!("skip: {} exists (use --force)", index.display());
+        crate::progress::line!("skip: {} exists (use --force)", index.display());
         return Ok(index);
     }
     let workspace = fetch::Workspace::new(&meta.id)?;
@@ -57,7 +61,12 @@ fn process(
     )?;
     let duration = samples as f64 / audio::SAMPLE_RATE as f64;
     let engine_secs = timings.get("engine");
-    eprintln!("Transcribed {duration:.1}s of audio in {engine_secs:.2}s of engine time");
+    if !terminal {
+        crate::progress::line!(
+            "Transcribed {duration:.1}s of audio in {engine_secs:.2}s of engine time"
+        );
+    }
+    progress::update(Stage::Write, 0.0, None);
     let write_start = Instant::now();
     let index = output::replace(&dir, |stage| {
         if cli.keep_media {
@@ -82,6 +91,12 @@ fn process(
     drop(spool);
     timings.add("write", write_start.elapsed().as_secs_f64());
     workspace.complete();
+    drop(progress);
+    if terminal {
+        crate::progress::line!(
+            "Transcribed {duration:.1}s of audio in {engine_secs:.2}s of engine time"
+        );
+    }
     Ok(index)
 }
 type Loader = std::thread::JoinHandle<(Result<engine::Engine>, f64)>;
@@ -119,24 +134,37 @@ fn transcribe(
         let mut blocks = blocks;
         let decoder = scope.spawn(move || {
             let start = Instant::now();
+            progress::update(Stage::Download, 0.0, None);
             let media = fetch::resolve(media, workspace)?;
             let download = start.elapsed().as_secs_f64();
             if let fetch::Media::Stream(_) = &media {
-                eprintln!("Streaming X API video directly through ffmpeg (lowest-bitrate mp4)");
+                crate::progress::line!(
+                    "Streaming X API video directly through ffmpeg (lowest-bitrate mp4)"
+                );
             }
-            eprintln!("Decoding: {}", meta.title);
+            crate::progress::line!("Decoding: {}", meta.title);
             let network = matches!(media, fetch::Media::Stream(_));
             let mut write_error = None;
+            let mut decoded_samples = 0;
+            progress::update(Stage::Decode, 0.0, meta.duration);
             let samples = audio::decode_blocks(
                 media.input(),
                 network,
                 cli.audio_stream,
                 meta.duration,
-                |block| match writer.write(&block) {
-                    Ok(keep_going) => keep_going,
-                    Err(error) => {
-                        write_error = Some(error);
-                        false
+                |block| {
+                    decoded_samples += block.len();
+                    progress::update(
+                        Stage::Decode,
+                        decoded_samples as f64 / audio::SAMPLE_RATE as f64,
+                        meta.duration,
+                    );
+                    match writer.write(&block) {
+                        Ok(keep_going) => keep_going,
+                        Err(error) => {
+                            write_error = Some(error);
+                            false
+                        }
                     }
                 },
             );
@@ -158,6 +186,11 @@ fn transcribe(
             pending.extend(chunker.ready(&pcm));
             if pending.len() >= engine::BATCH_CHUNKS {
                 let batch: Vec<_> = pending.drain(..engine::BATCH_CHUNKS).collect();
+                progress::update(
+                    Stage::Transcribe,
+                    offset as f64 / audio::SAMPLE_RATE as f64,
+                    meta.duration,
+                );
                 let engine = ready(engine, loader, timings)?;
                 let start = Instant::now();
                 engine.run(&pcm, &batch, offset, &mut transcription)?;
@@ -169,11 +202,21 @@ fn transcribe(
                     range.end -= consumed;
                 }
                 offset += consumed;
+                progress::update(
+                    Stage::Transcribe,
+                    offset as f64 / audio::SAMPLE_RATE as f64,
+                    meta.duration,
+                );
                 engine_secs += start.elapsed().as_secs_f64();
             }
         }
         let decoded = decoder.join().expect("decoder panicked");
         let tail_start = Instant::now();
+        progress::update(
+            Stage::Transcribe,
+            offset as f64 / audio::SAMPLE_RATE as f64,
+            meta.duration,
+        );
         // Keep a loaded engine for the next source even when this source failed.
         let engine = ready(engine, loader, timings)?;
         let (media, samples, download, decode) = decoded?;
@@ -183,9 +226,21 @@ fn transcribe(
         let (rest, hard_cuts) = chunker.finish(&pcm);
         pending.extend(rest);
         transcription.hard_cuts = hard_cuts;
+        let total = Some(samples as f64 / audio::SAMPLE_RATE as f64);
+        progress::update(
+            Stage::Transcribe,
+            offset as f64 / audio::SAMPLE_RATE as f64,
+            total,
+        );
         for batch in pending.chunks(engine::BATCH_CHUNKS) {
             let start = Instant::now();
             engine.run(&pcm, batch, offset, &mut transcription)?;
+            let processed = offset + batch.last().expect("a nonempty batch").end;
+            progress::update(
+                Stage::Transcribe,
+                processed as f64 / audio::SAMPLE_RATE as f64,
+                total,
+            );
             engine_secs += start.elapsed().as_secs_f64();
         }
         timings.add("engine", engine_secs);
@@ -236,7 +291,7 @@ fn run(cli: Cli) -> Result<bool> {
             Ok(path) => println!("{}", path.display()),
             Err(error) if error.downcast_ref::<ModelLoadFailed>().is_some() => return Err(error),
             Err(error) => {
-                eprintln!("scribe: {input}: {error:#}");
+                crate::progress::line!("scribe: {input}: {error:#}");
                 failed = true;
             }
         }
@@ -250,7 +305,7 @@ fn main() -> std::process::ExitCode {
         Ok(false) => std::process::ExitCode::SUCCESS,
         Ok(true) => std::process::ExitCode::FAILURE,
         Err(error) => {
-            eprintln!("scribe: {error:#}");
+            crate::progress::line!("scribe: {error:#}");
             std::process::ExitCode::FAILURE
         }
     }

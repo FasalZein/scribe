@@ -43,7 +43,7 @@ impl Timings {
             .iter()
             .map(|(stage, secs)| format!("{stage} {secs:.2}s"))
             .collect();
-        eprintln!(
+        crate::progress::line!(
             "timings: {}; total {:.2}s",
             stages.join(", "),
             self.elapsed()

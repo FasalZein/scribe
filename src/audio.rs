@@ -200,7 +200,7 @@ pub fn decode_blocks(
         }
     })?;
     if let Some(first) = errors.lines().next() {
-        eprintln!(
+        crate::progress::line!(
             "warning: ffmpeg reported {} error lines, but the decoded audio covers the reported \
              duration; a corrupt frame can lose a moment of audio. First: {first}",
             errors.lines().count()
@@ -347,7 +347,9 @@ fn ffmpeg(
 pub fn check_complete(samples: usize, expected: Option<f64>) -> Result<()> {
     let decoded = samples as f64 / SAMPLE_RATE as f64;
     let Some(expected) = expected.filter(|secs| secs.is_finite() && *secs > 0.0) else {
-        eprintln!("warning: source reports no duration; only ffmpeg errors can reveal truncation");
+        crate::progress::line!(
+            "warning: source reports no duration; only ffmpeg errors can reveal truncation"
+        );
         return Ok(());
     };
     let slack = SHORT_SECS.max(expected * SHORT_FRACTION);

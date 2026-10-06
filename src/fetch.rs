@@ -126,7 +126,7 @@ impl Workspace {
     /// to avoid a race where another process locks an unlinked inode for the same source ID.
     pub fn complete(self) {
         if let Err(error) = fs::remove_dir_all(&self.path) {
-            eprintln!(
+            crate::progress::line!(
                 "warning: cannot remove media cache {}: {error}",
                 self.path.display()
             );
@@ -216,16 +216,16 @@ pub fn media(input: &str, audio_stream: usize) -> Result<(Metadata, Pending)> {
         ));
     }
     if crate::sources::is_x_post(input) {
-        eprintln!("Fetching X API metadata: {input}");
+        crate::progress::line!("Fetching X API metadata: {input}");
         match x_media(input) {
             Ok(result) => return Ok(result),
             Err(XError::Fatal(error)) => return Err(error),
             Err(XError::Fallback(error)) => {
-                eprintln!("X API failed; falling back to yt-dlp: {error:#}")
+                crate::progress::line!("X API failed; falling back to yt-dlp: {error:#}")
             }
         }
     }
-    eprintln!("Fetching metadata: {input}");
+    crate::progress::line!("Fetching metadata: {input}");
     let output = yt_dlp(|command| {
         command.args(["--dump-single-json", "--no-playlist", "--", input]);
     })?;
@@ -271,7 +271,7 @@ pub fn resolve(media: Pending, workspace: &Path) -> Result<Media> {
     // URLs in the saved JSON stay valid for hours, far longer than this run needs.
     let info_path = workspace.join("info.json");
     fs::write(&info_path, info)?;
-    eprintln!("Downloading media");
+    crate::progress::line!("Downloading media");
     let output_path = yt_dlp(|command| media_download_args(command, workspace, &info_path))?;
     let path = String::from_utf8_lossy(&output_path.stdout)
         .lines()
@@ -460,7 +460,7 @@ fn download_model(
     } else {
         0
     };
-    eprintln!("Downloading model: {url}");
+    crate::progress::line!("Downloading model: {url}");
     let mut request = agent.get(url).set("Accept-Encoding", "identity");
     if offset > 0 {
         request = request.set("Range", &format!("bytes={offset}-"));
@@ -659,7 +659,7 @@ fn download(
             bail!("model download exceeds expected size");
         }
         if total - last_report >= 16 * 1024 * 1024 {
-            eprintln!(
+            crate::progress::line!(
                 "Model: {} MiB{}",
                 total / (1024 * 1024),
                 expected
@@ -690,7 +690,7 @@ fn download(
     if let Some(sha256) = sha256 {
         write_marker(path, sha256);
     }
-    eprintln!("Model cached: {} ({total} bytes)", path.display());
+    crate::progress::line!("Model cached: {} ({total} bytes)", path.display());
     Ok(actual)
 }
 
@@ -726,7 +726,7 @@ fn yt_dlp(args: impl Fn(&mut Command)) -> Result<Output> {
                 None
             };
             if let Some(uvx) = selected {
-                eprintln!(
+                crate::progress::line!(
                     "Using yt-dlp command: {}",
                     if uvx { "uvx yt-dlp" } else { "yt-dlp" }
                 );
@@ -754,7 +754,7 @@ fn yt_dlp(args: impl Fn(&mut Command)) -> Result<Output> {
         return run(None);
     }
     run(Some("yt-dlp")).or_else(|error| {
-        eprintln!("yt-dlp failed; retrying with uvx yt-dlp@latest: {error:#}");
+        crate::progress::line!("yt-dlp failed; retrying with uvx yt-dlp@latest: {error:#}");
         run(Some("yt-dlp@latest"))
     })
 }
