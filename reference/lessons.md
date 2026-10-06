@@ -61,10 +61,10 @@ lessons: <count>
 
 - **kind**: a *claim* is an assertion or opinion; a *mechanism* explains how something works; a *practice* is a recommended way of acting; a *trade-off* compares options and their costs.
 - **who**: every lesson names its speaker. When two speakers build the point together, write `A and B`. In the body, write "X argues..." or "X recommends...", so an opinion stays an opinion when it reaches a topic note.
-- **at**: the `[hh:mm:ss]` timestamp of the paragraph the lesson comes from, linked to its part file.
+- **at**: the `[hh:mm:ss]` timestamp of the paragraph the lesson comes from, linked to its part file. When a lesson draws on several paragraphs or parts, use the first one.
 - **topics**: 1-3 lower-kebab slugs that name subjects, not sources (`durable-execution`, not `pi-durable-talk`). Reuse a slug from `topics/INDEX.md` when one fits.
 - **verify**: the last bullet, present only when the lesson states a fact (a number, a version, a benchmark, a product capability) that the transcript alone cannot prove. Name what to check. Omit the bullet otherwise.
-- One lesson holds one idea. Split a passage that makes two points.
+- One lesson holds one idea. Split a passage that makes two points. A run of numbers about one thing (one product, one benchmark) is one idea.
 
 ## Done
 
