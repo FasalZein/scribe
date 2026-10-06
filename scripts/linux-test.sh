@@ -10,9 +10,9 @@
 #   SCRIBE_TEST_MEDIA  media file on the host (mounted read-only). Required.
 #                      The regression test needs the Pi durable-sessions talk.
 #   SCRIBE_CLIP_SECS   clip length for the end-to-end run (default 180).
-#   TRANSCRIBE_CMAKE_ARGS  extra CMake arguments (default -DGGML_NATIVE=OFF, as
-#                      in the release build; a native build fails with GCC 12
-#                      in an OrbStack arm64 VM).
+#   TRANSCRIBE_CMAKE_ARGS  extra CMake arguments (default -DGGML_NATIVE=OFF
+#                      -DTRANSCRIBE_USE_SYSTEM_BLAS=OFF, as in the Linux release;
+#                      a native build fails with GCC 12 in an OrbStack arm64 VM).
 set -eu
 
 arch=${1:-arm64}
@@ -20,7 +20,7 @@ case $arch in arm64 | amd64) ;; *) echo "usage: $0 [arm64|amd64]" >&2; exit 2 ;;
 : "${SCRIBE_TEST_MODEL:?set SCRIBE_TEST_MODEL to a Parakeet GGUF path}"
 : "${SCRIBE_TEST_MEDIA:?set SCRIBE_TEST_MEDIA to a media file path}"
 clip_secs=${SCRIBE_CLIP_SECS:-180}
-cmake_args=${TRANSCRIBE_CMAKE_ARGS:--DGGML_NATIVE=OFF}
+cmake_args=${TRANSCRIBE_CMAKE_ARGS:--DGGML_NATIVE=OFF -DTRANSCRIBE_USE_SYSTEM_BLAS=OFF}
 repo=$(cd "$(dirname "$0")/.." && pwd)
 image=scribe-linux-test:$arch
 

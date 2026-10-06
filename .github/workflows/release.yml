@@ -1,5 +1,6 @@
 name: Release
 on:
+  workflow_dispatch:
   push:
     tags: ['v*']
 permissions:
@@ -14,10 +15,9 @@ jobs:
       matrix:
         include:
           - { os: macos-14, target: aarch64-apple-darwin, optional: false }
-          # 22.04 images keep the glibc requirement low (2.35), so the binaries
-          # also run on Debian 12 and Ubuntu 22.04.
-          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, optional: false }
-          - { os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu, optional: false }
+          # manylinux_2_28 supplies AlmaLinux 8 (glibc 2.28) and gcc-toolset.
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, platform: linux/amd64, image: quay.io/pypa/manylinux_2_28_x86_64, optional: false }
+          - { os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu, platform: linux/arm64, image: quay.io/pypa/manylinux_2_28_aarch64, optional: false }
           # Windows is optional: a failed build does not block the release.
           - { os: windows-latest, target: x86_64-pc-windows-msvc, optional: true }
     runs-on: ${{ matrix.os }}
@@ -25,18 +25,36 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Check that the tag matches Cargo.toml
+        if: runner.os != 'Linux'
+      - name: Read version and check release tags
         shell: bash
         run: |
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
-          test "v$version" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME != Cargo.toml v$version"; exit 1; }
-          skill=$(sed -n 's/^  version: "\(.*\)"/\1/p' skills/scribe/SKILL.md | head -n 1)
-          test "$skill" = "$version" || { echo "skills/scribe/SKILL.md version $skill != Cargo.toml $version"; exit 1; }
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            test "v$version" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME != Cargo.toml v$version"; exit 1; }
+            skill=$(sed -n 's/^  version: "\(.*\)"/\1/p' skills/scribe/SKILL.md | head -n 1)
+            test "$skill" = "$version" || { echo "skills/scribe/SKILL.md version $skill != Cargo.toml $version"; exit 1; }
+          fi
           echo "VERSION=$version" >> "$GITHUB_ENV"
-      - name: Install native build prerequisites (Linux)
+      - name: Build portable Linux binary
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y cmake g++
+        run: |
+          docker run --rm --platform '${{ matrix.platform }}' \
+            -v "$PWD:/src" -w /src '${{ matrix.image }}' bash -euo pipefail -c '
+              curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+              export PATH=/root/.cargo/bin:$PATH
+              export TRANSCRIBE_CMAKE_ARGS="-DGGML_NATIVE=OFF -DTRANSCRIBE_USE_SYSTEM_BLAS=OFF"
+              # The crate manifest emits dylib=stdc++; rustc -l overrides its kind.
+              # CXXSTDLIB is not read by this crate. gcc_eh resolves unwinding
+              # before Rust can pull in libgcc_s; glibc itself stays dynamic.
+              export RUSTFLAGS="-L native=$(dirname "$(g++ -print-file-name=libstdc++.a)") -l static=stdc++ -l static=gcc_eh -C link-arg=-static-libgcc"
+              cargo build --release --locked
+            '
+      - name: Check Linux binary on clean systems
+        if: runner.os == 'Linux'
+        run: scripts/portable-check.sh target/release/scribe '${{ matrix.platform }}'
       - run: cargo build --release --locked
+        if: runner.os != 'Linux'
       - name: Package (macOS, Linux)
         if: runner.os != 'Windows'
         shell: bash
@@ -61,6 +79,7 @@ jobs:
           name: scribe-${{ matrix.target }}
           path: scribe-*-${{ matrix.target }}.*
   release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-latest
     steps:
