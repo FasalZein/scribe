@@ -23,11 +23,12 @@ fn slug(title: &str) -> String {
     let mut slug = slug_prefix(title, TITLE_SLUG_CHARS + 1);
     if let Some((end, next)) = slug.char_indices().nth(TITLE_SLUG_CHARS) {
         slug.truncate(end);
-        if next.is_alphanumeric() && !slug.ends_with('-') {
-            if let Some(boundary) = slug.rfind('-') {
-                slug.truncate(boundary);
-            }
-            // No boundary: keep the capped first word rather than an empty name.
+        // No boundary: keep the capped first word rather than an empty name.
+        if next.is_alphanumeric()
+            && !slug.ends_with('-')
+            && let Some(boundary) = slug.rfind('-')
+        {
+            slug.truncate(boundary);
         }
     }
     slug.trim_end_matches('-').to_owned()
@@ -444,7 +445,16 @@ pub fn write(
         .as_object()
         .context("frontmatter is not an object")?
     {
-        header.push_str(&format!("{key}: {value}\n"));
+        if matches!(
+            key.as_str(),
+            "fetch_secs" | "decode_secs" | "model_load_secs" | "engine_secs" | "total_secs"
+        ) {
+            // Centiseconds match --timings and keep useful stage detail without float noise.
+            let seconds = value.as_f64().context("stage time is not a number")?;
+            header.push_str(&format!("{key}: {seconds:.2}\n"));
+        } else {
+            header.push_str(&format!("{key}: {value}\n"));
+        }
     }
     header.push_str("---\n\n");
     header.push_str(&entry);
@@ -634,10 +644,10 @@ mod tests {
                 );
             }
             for line in [
-                "fetch_secs: 5.0",
-                "decode_secs: 4.0",
-                "model_load_secs: 6.0",
-                "engine_secs: 1.0",
+                "fetch_secs: 5.00",
+                "decode_secs: 4.00",
+                "model_load_secs: 6.00",
+                "engine_secs: 1.00",
             ] {
                 assert!(frontmatter.lines().any(|actual| actual == line), "{index}");
             }
@@ -648,11 +658,61 @@ mod tests {
                 .parse()
                 .unwrap();
             assert!(
-                total.is_finite() && total >= before && total <= after,
-                "total must be elapsed time, not the sum: {total}"
+                total.is_finite() && total >= before - 0.005 && total <= after + 0.005,
+                "total must be elapsed time rounded to centiseconds, not the sum: {total}"
             );
             fs::remove_dir_all(root).unwrap();
         }
+    }
+
+    #[test]
+    fn index_stage_times_use_two_decimal_places() {
+        let root = temp_root("times-rounded");
+        let m = meta("file:rounded", "Rounded stage times", None);
+        let dir = directory(&root, &m).unwrap();
+        let cli = Cli::parse_from(["scribe", "x"]);
+        let mut timings = crate::timings::Timings::new(false);
+        timings.add("metadata", 1.234);
+        timings.add("download", 2.345);
+        timings.add("decode", 7.0353192909999995);
+        timings.add("model", 0.0001);
+        timings.add("engine", 12.344);
+        let before = timings.elapsed();
+        write(&dir, &m, &cli, 60.0, &timings, &words("hello"), 0).unwrap();
+        let after = timings.elapsed();
+        let index = fs::read_to_string(dir.join("index.md")).unwrap();
+        let frontmatter = index.split("---").nth(1).unwrap();
+        for (key, expected) in [
+            ("fetch_secs", Some("3.58")),
+            ("decode_secs", Some("7.04")),
+            ("model_load_secs", Some("0.00")),
+            ("engine_secs", Some("12.34")),
+            ("total_secs", None),
+        ] {
+            let value = frontmatter
+                .lines()
+                .find_map(|line| line.strip_prefix(&format!("{key}: ")))
+                .unwrap();
+            if let Some(expected) = expected {
+                assert_eq!(value, expected, "{key}");
+            }
+            let (whole, fraction) = value.split_once('.').unwrap();
+            assert!(whole.chars().all(|c| c.is_ascii_digit()), "{key}: {value}");
+            assert_eq!(fraction.len(), 2, "{key}: {value}");
+            assert!(
+                fraction.chars().all(|c| c.is_ascii_digit()),
+                "{key}: {value}"
+            );
+            let seconds: f64 = value.parse().unwrap();
+            assert!(seconds.is_finite() && seconds >= 0.0);
+            if key == "total_secs" {
+                assert!(
+                    seconds >= before - 0.005 && seconds <= after + 0.005,
+                    "total must be elapsed time rounded to centiseconds: {seconds}"
+                );
+            }
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -666,7 +726,7 @@ mod tests {
         write(&dir, &m, &cli, 60.0, &timings, &words("hello"), 0).unwrap();
         let index = fs::read_to_string(dir.join("index.md")).unwrap();
         assert!(
-            index.lines().any(|line| line == "model_load_secs: 0.0"),
+            index.lines().any(|line| line == "model_load_secs: 0.00"),
             "{index}"
         );
         fs::remove_dir_all(root).unwrap();
