@@ -14,7 +14,7 @@ Rust CLI (`src/`) plus the agent skill in `skills/scribe/` (`SKILL.md`, `referen
 | `SCRIBE_TEST_MODEL=<gguf> SCRIBE_TEST_MEDIA=<mp4> scripts/linux-test.sh [arm64\|amd64]` | Linux CPU build, tests and a 3-minute end-to-end run in Docker. |
 | `sh scripts/tests/install-check.sh` | Offline installer checks: safe replacement, CPU tiers, portable fallback and override. `SCRIBE_CPUINFO` injects CPU data for tests only. |
 | `scripts/portable-check.sh <binary> [arm64\|amd64]` | Check the Linux release ELF floor (glibc ≤ 2.28, no BLAS or dynamic C++ runtime) and CPU backend in clean Docker images; not an inference test. |
-| `gh workflow run cpu-bench.yml\|cpu-wer.yml\|release.yml -R FasalZein/scribe --ref main` | Manual runs: x86 tier timing (about 26 min), x86 avx2-vs-portable WER on LibriSpeech (about 3 h), release builds without publishing. Score other WER runs with `scripts/wer-compare.py`. |
+| `gh workflow run cpu-bench.yml\|cpu-wer.yml\|model-bench.yml\|release.yml -R FasalZein/scribe --ref main` | Manual runs: x86 tier timing (about 26 min), x86 avx2-vs-portable WER on LibriSpeech (about 3 h), x86 avx2 WER, speed and peak RSS of four models on LibriSpeech (issue #22, one runner per model), release builds without publishing. Score other WER runs with `scripts/wer-compare.py`. |
 | `git tag vX.Y.Z && git push origin vX.Y.Z` | Release: `.github/workflows/release.yml` builds and attaches the binaries. The tag must equal `version` in `Cargo.toml` and `metadata.version` in `skills/scribe/SKILL.md`; CI fails when they differ, and the installer reads the SKILL.md value. |
 
 ## Traps

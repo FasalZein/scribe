@@ -1,0 +1,194 @@
+# Manual x86_64 model benchmark for issue #22: WER, engine time and peak RSS of four GGUF models
+# with the avx2 tier on GitHub runners.
+#
+# Data: the LibriSpeech test-clean subset of cpu-wer.yml (one chapter per speaker, 40 chapters,
+# 3.05 h of speech; each chapter joined into one WAV with 0.5 s gaps). The 4 TED talks of the
+# macOS and arm64 runs cannot be redistributed, so this workflow cannot use them.
+#
+# One runner per model, so a slow model does not delay the others and the runs do not share a CPU.
+# Ultra runs at about 0.17x real time with avx2 (cpu-wer.yml), so it needs about 0.5 h. The larger
+# models are expected to be several times slower. The transcribe step stops at STEP_MINUTES; the
+# score job then compares only the chapters every model finished, and says so.
+name: Model bench
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  # LibriSpeech (CC BY 4.0). MD5 as published in https://www.openslr.org/resources/12/md5sum.txt.
+  LIBRISPEECH_URL: https://www.openslr.org/resources/12/test-clean.tar.gz
+  LIBRISPEECH_MD5: 32fa31d27d2e1cad72775fee3f4849a9
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the avx2 tier in manylinux_2_28
+        run: |
+          mkdir -p bin
+          docker run --rm --platform linux/amd64 \
+            -v "$PWD:/src" -w /src quay.io/pypa/manylinux_2_28_x86_64 bash -euo pipefail -c '
+              curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+              export PATH=/root/.cargo/bin:$PATH
+              # Same RUSTFLAGS, base CMake args and avx2 tier args as cpu-wer.yml.
+              export RUSTFLAGS="-L native=$(dirname "$(g++ -print-file-name=libstdc++.a)") -l static=stdc++ -l static=gcc_eh -C link-arg=-static-libgcc"
+              args="-DGGML_NATIVE=OFF -DTRANSCRIBE_USE_SYSTEM_BLAS=OFF -DGGML_SSE42=ON -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_BMI2=ON -DGGML_AVX_VNNI=OFF -DGGML_AVX512=OFF"
+              TRANSCRIBE_CMAKE_ARGS="$args" cargo build --release --locked
+              cp target/release/scribe bin/scribe-avx2
+              echo "TRANSCRIBE_CMAKE_ARGS=$args" > bin/cmake-avx2.txt
+              chown -R "$(stat -c %u:%g /src)" bin target
+            '
+          sha256sum bin/scribe-avx2 | tee -a bin/cmake-avx2.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scribe-avx2
+          path: bin/
+          if-no-files-found: error
+
+  transcribe:
+    needs: build
+    runs-on: ubuntu-22.04
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ultra-q8
+            url: https://huggingface.co/handy-computer/parakeet-ultra-gguf/resolve/39eeb55181f0d354fd934f06e92fd8d5037fed8e/parakeet-ultra-Q8_0.gguf
+            sha256: 007a59761e9258779f189df396b50d12b83bb5b79e66df4b955c230d2f2a0a59
+          - name: ultra-q4km
+            url: https://huggingface.co/handy-computer/parakeet-ultra-gguf/resolve/39eeb55181f0d354fd934f06e92fd8d5037fed8e/parakeet-ultra-Q4_K_M.gguf
+            sha256: c69b7a5f9071a7afd8a1818ef7ae542c386c4b01ed0cac380c19a99947646bf9
+          - name: qwen3-asr-1.7b-q8
+            url: https://huggingface.co/handy-computer/Qwen3-ASR-1.7B-gguf/resolve/3555bd238a8572bbace3ebf60d23b036dc0a5dbe/Qwen3-ASR-1.7B-Q8_0.gguf
+            sha256: 9a0d81792dfea2d5f278b8a63deb3ea6e02139ce42c2301f32ea19c4f77526b7
+          - name: granite-4.1-2b-q8
+            url: https://huggingface.co/handy-computer/granite-speech-4.1-2b-gguf/resolve/5fa89dfac74d52a186f63647553b9e1f7ae36e83/granite-speech-4.1-2b-Q8_0.gguf
+            sha256: 666d2f7736bfa140f44d67ba7bcb0827aa5718462f13850af294d72c1f09b218
+    env:
+      NAME: ${{ matrix.name }}
+      MODEL_URL: ${{ matrix.url }}
+      MODEL_SHA256: ${{ matrix.sha256 }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: scribe-avx2
+          path: bin
+      - name: Check the runner CPU has avx2
+        run: |
+          mkdir -p wer
+          chmod +x bin/scribe-avx2
+          lscpu | grep -E 'Model name|^CPU\(s\)' | tee "wer/cpu-$NAME.txt"
+          for f in avx2 fma f16c bmi2; do
+            grep -q -w "$f" /proc/cpuinfo || { echo "::error::runner CPU lacks $f"; exit 1; }
+          done
+          cat bin/cmake-avx2.txt >> "wer/cpu-$NAME.txt"
+          bin/scribe-avx2 --version
+      - name: Download the model and LibriSpeech test-clean
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg jq time > /dev/null
+          curl -fsSL --retry 3 -o model.gguf "$MODEL_URL"
+          echo "$MODEL_SHA256  model.gguf" | sha256sum -c -
+          printf 'model=%s bytes=%s\n' "$MODEL_URL" "$(stat -c %s model.gguf)" >> "wer/cpu-$NAME.txt"
+          curl -fsSL --retry 3 -o test-clean.tar.gz "$LIBRISPEECH_URL"
+          echo "$LIBRISPEECH_MD5  test-clean.tar.gz" | md5sum -c -
+          tar xzf test-clean.tar.gz
+      - name: Join each selected chapter into one WAV and one reference
+        run: |
+          # Same subset and joining as cpu-wer.yml.
+          gap_bytes=16000
+          mkdir -p data/wav wer/ref
+          for spk in $(cd LibriSpeech/test-clean && printf '%s\n' * | sort -n); do
+            ch=$(cd "LibriSpeech/test-clean/$spk" && printf '%s\n' * | sort -n | head -n 1)
+            dir="LibriSpeech/test-clean/$spk/$ch"
+            id="$spk-$ch"
+            : > "data/$id.raw"
+            : > "wer/ref/$id.txt"
+            while read -r utt text; do
+              ffmpeg -nostdin -hide_banner -loglevel error -i "$dir/$utt.flac" -f s16le -ac 1 -ar 16000 - >> "data/$id.raw"
+              head -c "$gap_bytes" /dev/zero >> "data/$id.raw"
+              printf '%s\n' "$text" >> "wer/ref/$id.txt"
+            done < "$dir/$id.trans.txt"
+            ffmpeg -nostdin -y -hide_banner -loglevel error -f s16le -ar 16000 -ac 1 -i "data/$id.raw" -c:a pcm_s16le "data/wav/$id.wav"
+            rm "data/$id.raw"
+          done
+          echo "chapters=$(find data/wav -name '*.wav' | wc -l) utterances=$(cat wer/ref/*.txt | wc -l)"
+      - name: Transcribe each chapter
+        timeout-minutes: 290
+        run: |
+          mkdir -p "wer/hyp-$NAME" "wer/log-$NAME"
+          runs="wer/runs-$NAME.md"
+          printf '| Chapter | Load 1/5/15 min before run | Audio s | Engine s | Peak RSS MB | Words |\n| --- | --- | ---: | ---: | ---: | ---: |\n' > "$runs"
+          for wav in data/wav/*.wav; do
+            id=$(basename "$wav" .wav)
+            load=$(cut -d' ' -f1-3 /proc/loadavg)
+            /usr/bin/time -v bin/scribe-avx2 "$wav" -m model.gguf --backend cpu --timings -o "out/$id" \
+              > "wer/log-$NAME/$id.stdout" 2> "wer/log-$NAME/$id.stderr"
+            jq -j '.text + " "' out/"$id"/*/segments.jsonl > "wer/hyp-$NAME/$id.txt"
+            printf '| %s | %s | %s | %s | %s | %s |\n' "$id" "$load" \
+              "$(sed -n 's/^duration_secs: //p' out/"$id"/*/index.md)" \
+              "$(sed -n 's/^engine_secs: //p' out/"$id"/*/index.md)" \
+              "$(awk -F': ' '/Maximum resident set size/{printf "%.0f", $2/1024}' "wer/log-$NAME/$id.stderr")" \
+              "$(sed -n 's/^words: //p' out/"$id"/*/index.md)" | tee -a "$runs"
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bench-${{ matrix.name }}
+          path: wer/
+          if-no-files-found: error
+
+  score:
+    needs: transcribe
+    if: always()
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bench-*
+          merge-multiple: true
+          path: wer
+      - name: Score each model against Ultra Q8_0
+        run: |
+          models="ultra-q8 ultra-q4km qwen3-asr-1.7b-q8 granite-4.1-2b-q8"
+          # Score only the chapters every model finished; list the rest.
+          mkdir -p wer/ref-common
+          for f in wer/ref/*.txt; do
+            id=$(basename "$f")
+            ok=1
+            for m in $models; do [ -s "wer/hyp-$m/$id" ] || ok=0; done
+            if [ "$ok" = 1 ]; then cp "$f" wer/ref-common/; else echo "not in every model: $id"; fi
+          done | tee wer/skipped.txt
+          set --
+          for m in $models; do
+            mkdir -p "wer/common-$m"
+            for f in wer/ref-common/*.txt; do cp "wer/hyp-$m/$(basename "$f")" "wer/common-$m/"; done
+            set -- "$@" "$m=wer/common-$m"
+          done
+          python3 scripts/wer-compare.py wer/ref-common "$@" | tee wer/results.md
+          {
+            echo '## Model bench: x86_64 avx2, LibriSpeech test-clean subset'
+            echo
+            echo "Chapters scored: $(find wer/ref-common -name '*.txt' | wc -l) of $(find wer/ref -name '*.txt' | wc -l)"
+            echo
+            cat wer/results.md
+            for m in $models; do
+              echo; echo "### $m runs"; echo
+              cat "wer/runs-$m.md" 2>/dev/null || echo "no runs file"
+              echo; echo '```'; cat "wer/cpu-$m.txt" 2>/dev/null; echo '```'
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: model-bench
+          path: |
+            wer/results.md
+            wer/skipped.txt
+            wer/runs-*.md
+            wer/cpu-*.txt
+            wer/ref/
+            wer/hyp-*/
