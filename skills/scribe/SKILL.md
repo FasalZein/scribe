@@ -113,10 +113,10 @@ For each index, read frontmatter `title`, `parts`, and `words`. Give the source 
 
 **Repair** an existing `lessons.md` when its `scribe:` error is one of these two. `lessons check` reports one error per run.
 
-- `frontmatter: not valid YAML at line <n>: ...`: put the value on file line `<n>` in double quotes. Write `\"` for a double quote inside it. For `title`, copy the `title:` line from `index.md`.
+- `frontmatter: not valid YAML at line <n>: ...`: put the value on file line `<n>` in double quotes. Write `\"` for a double quote and `\\` for a backslash inside it. For `title`, copy the `title:` line from `index.md`.
 - `### L<n>: - <key>: belongs in the metadata list under the title, not in the body`: move that line into the metadata list under the title of L<n>. Put `- verify:` last.
 
-Repair a copy: copy `lessons.md` to `lessons.draft.md`, fix the copy, and run `<scribe> lessons check` on the copy. Repeat while the error is one of these two. When the check exits 0, publish the copy with the step 5 publish commands, and mark the source **already extracted**. When it reports another error, remove `lessons.draft.md` and mark the source **extract**.
+Repair a copy: copy `lessons.md` to `lessons.draft.md`, fix the copy, and run `<scribe> lessons check` on the copy. Repeat while the error is one of these two. When the same error names the same line after your fix, remove `lessons.draft.md` and mark the source **extract**. When the check exits 0, publish the copy with the step 5 publish commands, and mark the source **already extracted**. When it reports another error, remove `lessons.draft.md` and mark the source **extract**.
 
 Done when each source has one mark.
 
