@@ -53,7 +53,7 @@ Create this frontmatter first, then append lessons. Omit `lessons:` and the fron
 ---
 source: <source URL or path from index.md>
 index: index.md
-title: <title from index.md, on one line>
+title: <the title: line from index.md, copied exactly, quotes included>
 speakers: [<name>, ...]
 focus: <focus or null>
 extracted_at: <RFC 3339 time>
@@ -84,6 +84,8 @@ extracted_at: <RFC 3339 time>
 
 - <Unclear terms, possible misrecognitions, conflicting claims, or unresolved questions.>
 ```
+
+`lessons check` and `lessons finalize` reject frontmatter that is not valid YAML. Quote a value that contains `: ` or that starts with a special character. `index.md` already quotes those values. stderr says `frontmatter: not valid YAML` and names the line.
 
 ### Anchors and titles
 
@@ -124,6 +126,8 @@ Keep one idea in each lesson. Split a passage that makes two points. Keep relate
 
 ### Metadata
 
+Write `- kind:`, `- who:`, `- at:`, `- topics:`, and `- verify:` in the list under the title. `lessons check` fails when one of those lines is in the body. stderr says `belongs in the metadata list under the title, not in the body`.
+
 - **who**: Name the speaker. Write `A and B` when speakers build one point together. Attribute an opinion in the body, for example "X argues...".
 - **at**: Use the `[hh:mm:ss]` timestamp on the transcript paragraph where the lesson starts. The part file must contain that timestamp at the start of a line, followed by a space. Link the part relative to the source folder. When a lesson uses several paragraphs, cite the first. A time written only in prose is not a citation.
 - **topics**: One to three topic slugs, separated by commas. A slug is lowercase words of letters and digits, joined by single hyphens, for example `durable-execution`. Name the subject, not the source. Reuse a slug from the topics index when one fits. A slug names the source when both checks pass. It would sit on more than half of the lessons in this source. Every word of the slug appears as a whole word in the `title` line or the `uploader` line in `index.md`, ignoring case and punctuation. A word may come from either line. Remove that slug from those lessons. When a lesson then has no slug, give it the narrower subject that lesson teaches. A subject may cover most lessons of one source when one of its words is absent from the title and the uploader.
@@ -140,7 +144,7 @@ Run:
 <scribe> lessons check <path/to/lessons.draft.md>
 ```
 
-`lessons finalize` checks the lesson bodies and citations, then writes `lessons:` and the sorted unique `topics:` list. It keeps your other frontmatter fields and the body. When validation fails, finalize leaves the draft unchanged. `lessons check` only reads. It checks the count, the anchors, the title lines, the required fields, the kinds, the procedure step numbers, the topic list, the part links, and the paragraph timestamps.
+`lessons finalize` checks the lesson bodies and citations, then writes `lessons:` and the sorted unique `topics:` list. It keeps your other frontmatter fields and the body. When validation fails, finalize leaves the draft unchanged. `lessons check` only reads. It checks the count, the anchors, the title lines, the required fields, the kinds, the procedure step numbers, the topic list, the part links, the paragraph timestamps, the frontmatter YAML, and the metadata list under the title.
 
 Both commands exit 0 on success. On failure they exit nonzero and print `scribe: <reason>` on stderr. Neither command loads a model.
 

@@ -110,7 +110,7 @@ Run `<scribe> topics index` after the topic notes are written. It rebuilds `topi
 - A single-source slug with no note appears under `## Single-source`, with a link to each tagged lesson.
 - A slug with several sources and no note appears under `## Pending notes`. Create those notes, then run `<scribe> topics index` again.
 - An existing topic note stays out of both lists.
-- The command checks the lessons files, and it requires a title and a scope paragraph in every topic note. It replaces the index only after those checks pass. On failure, correct the named file and run the command again. The existing index stays in place.
+- The command checks the lessons files. It requires a title and a scope paragraph in every topic note. It checks every relative link in every topic note. stderr lists each broken link on its own line. The message starts with `scribe:`. Each line shows the note path, the target, and the reason. `missing file` means the linked file is absent. `no ### L<n> heading` means `#l<n>` has no matching heading. `no paragraph starts with [hh:mm:ss]` means that part has no line starting with that timestamp and a space. Correct every named note, then run `<scribe> topics index` again. The command writes `topics/INDEX.md` only after every check passes. Until then the existing index stays in place.
 
 The index is complete when the command exits 0 and no affected slug remains under Pending notes.
 
