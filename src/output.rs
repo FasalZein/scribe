@@ -277,6 +277,9 @@ fn link_preserved(from: &Path, to: &Path) -> Result<()> {
 pub fn replace(dir: &Path, build: impl FnOnce(&Path) -> Result<PathBuf>) -> Result<PathBuf> {
     let parent = dir.parent().context("publication has no parent")?;
     let _lock = publication_lock(parent)?;
+    // A concurrent run on the same source can fail and let its EmptyFolderGuard remove the
+    // still-empty folder after this run resolved it. Recreate it under the lock.
+    fs::create_dir_all(dir)?;
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
         .as_nanos();
@@ -1013,6 +1016,20 @@ mod tests {
         assert!(!record.exists());
         assert!(other_backup.exists());
         assert!(!other_dir.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn publication_recreates_a_folder_that_a_failed_concurrent_run_removed() {
+        let root = temp_root("concurrent-cleanup");
+        let m = meta("youtube:a", "Video", Some("20260101"));
+        // Both runs resolve the same empty folder; the failed one drops its guard first.
+        let dir = directory(&root, &m).unwrap();
+        drop(EmptyFolderGuard(&dir));
+        assert!(!dir.exists());
+        publish(&dir, &m, "late");
+        assert!(dir.join("index.md").is_file());
+        assert!(dir.join("parts/01.md").is_file());
         fs::remove_dir_all(root).unwrap();
     }
 
