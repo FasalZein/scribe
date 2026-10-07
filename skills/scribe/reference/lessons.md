@@ -25,7 +25,9 @@ Write lessons in English. Keep an optional quote in the source language. When th
 
 ## Resume
 
-A long source can outlast one context. The draft is the resume point.
+A long source can outlast one context. The draft is the resume point. It belongs to the current transcript.
+
+When this run used `--force`, or the user asked to redo the source, remove `lessons.draft.md` and start at the first part. The old draft cites parts that may have moved.
 
 After you finish reading a part, append that part's lessons to `lessons.draft.md`. Then set the last section to the next part:
 

@@ -20,7 +20,7 @@ Each slug is a section:
 - `single-source` means one source uses the slug. `<n> sources` is the source count. A note that nothing currently uses is `existing note, 0 sources`. Leave that note in place on a routine run.
 - The links are relative to the library root. In a topic note, prefix `../`.
 - Near-duplicates are listed under `## Near-duplicate slugs` as `- <slug> / <other>`. One slug's full text is a prefix of the other, such as `agent-trust` / `agent-trustworthiness`. A shared word is not enough: `agent-trust` and `agent-verification` are not a pair. `None.` means there is no pair. A pair is a candidate to inspect, not a decision that the subjects are the same.
-- The command reads every `lessons.md` in the library. A validation error names that file. An older heading such as `### L1. Title` fails here. Fix the named file with [`lessons.md`](lessons.md), publish it with the step 5 commands, then rerun the plan.
+- The command reads every `lessons.md` in the library. A validation error names that file. An older heading such as `### L1. Title` fails here. When that source still has parts, fix the named file with [`lessons.md`](lessons.md), publish it with the step 5 commands, and rerun the plan. When the error is a missing part and the index says `parts: 0`, re-extraction cannot repair the file. Ask the user to move that `lessons.md` aside, as step 4 describes, and rerun the plan.
 
 **Reuse**: for a lesson on a new or re-extracted source, keep an existing slug when it fits. Inspect each flagged pair before you add a slug.
 

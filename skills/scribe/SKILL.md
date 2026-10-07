@@ -5,7 +5,9 @@ metadata:
   version: "0.2.1"
 allowed-tools:
   - Bash(sh *scripts/install.sh)
+  - Bash(*sh *scripts/install.sh)
   - Bash(powershell -ExecutionPolicy Bypass -File *scripts\install.ps1)
+  - Bash(powershell -ExecutionPolicy Bypass -Command *install.ps1*)
   - Bash(scribe *)
   - Bash(*/scribe *)
   - Bash(uvx yt-dlp@latest *)
@@ -43,7 +45,19 @@ topics/INDEX.md                           topic notes, then single-source slugs
 
 On every run that calls scribe, run `sh <this skill's directory>/scripts/install.sh`. On Windows, run `powershell -ExecutionPolicy Bypass -File <this skill's directory>\scripts\install.ps1`.
 
-The script installs or updates scribe and checks ffmpeg, ffprobe, and uvx or yt-dlp. It also runs `doctor` on the binary it checked. `doctor` reports the backend, devices, memory, tool versions, the model cache, and a short self-test. When the script prints a PATH export, run that export for this session and run the script again. When it prints a package install command, run that command only with the user's approval, then run the script again. Build prerequisites are in the [README](https://github.com/FasalZein/scribe#build-from-source).
+The script installs or updates scribe and checks ffmpeg, ffprobe, and uvx or yt-dlp. It also runs `doctor` on the binary it checked. `doctor` reports the backend, devices, memory, tool versions, the model cache, and a short self-test. When the script prints a PATH export, run that export and the script in one command. Use the install directory the script printed. A later command does not keep the export. On macOS and Linux, with the default install directory:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"; sh <this skill's directory>/scripts/install.sh
+```
+
+On Windows, one PowerShell command sets `$env:PATH` and then runs the script. Replace `<install-dir>` and `<skill-dir>`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -Command "$env:PATH = '<install-dir>;' + $env:PATH; & '<skill-dir>\scripts\install.ps1'"
+```
+
+When the script prints a package install command, run that command only with the user's approval, then run the script again. Build prerequisites are in the [README](https://github.com/FasalZein/scribe#build-from-source).
 
 Take `<scribe>` from the last `ok: scribe <version> (<path>)` line. That path is the binary the script checked. An older `scribe` earlier on PATH is a different binary. Call the printed path, not the other one.
 
@@ -89,7 +103,7 @@ Done when every source has an `index.md` path, a reported failure, or a not-atte
 
 For each index, read frontmatter `title`, `parts`, and `words`. Give the source the first mark that fits:
 
-1. **no speech**: `parts: 0`. Do not extract it. Name it in the report.
+1. **no speech**: `parts: 0`. Do not extract it. When `lessons.md` exists, run `<scribe> lessons check` on it. When that check exits 0, or when `lessons.md` is absent, name the source in the report. When the check fails, name the source and the `scribe:` error. Before step 6, ask the user whether to move `lessons.md` aside, for example to `lessons.stale.md`, and to remove topic-note bullets that link to it. Until that file is moved aside, `topics plan` and `topics index` fail for the whole library.
 2. **extract**: `lessons.draft.md` exists, or the user asked to redo the source, or this run used `--force`.
 3. **extract**: `lessons.md` is absent, or `<scribe> lessons check <lessons.md>` exits non-zero.
 4. **already extracted**: `lessons check` exits 0.
@@ -97,6 +111,8 @@ For each index, read frontmatter `title`, `parts`, and `words`. Give the source 
 Done when each source has one mark.
 
 ### 5. Extract lessons
+
+When this run used `--force`, or the user asked to redo the source, remove `lessons.draft.md` before extraction. That draft cites the previous parts.
 
 One source: extract it inline. Follow [`reference/lessons.md`](reference/lessons.md).
 
@@ -131,6 +147,8 @@ Done when every source marked **extract** has a `lessons.md` that passes `lesson
 ### 6. Merge lessons into topic notes
 
 Follow [`reference/topics.md`](reference/topics.md).
+
+When a source has `parts: 0` and its `lessons.md` still fails `lessons check`, wait for the user's answer before this step. Move that file aside only when the user agrees, and remove topic-note bullets that link to it. When the user does not agree, stop. `topics plan` fails while that file remains.
 
 Run `<scribe> topics plan`. Start one helper per topic note to create or update, at most 6 at a time. When you cannot start helpers, merge the notes yourself, one at a time.
 
