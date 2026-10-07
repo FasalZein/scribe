@@ -200,7 +200,12 @@ install_release_tier() {
   chmod 755 "$tmp/scribe" && publish_candidate "$tmp/scribe"
   status=$?
   rm -rf "$tmp"
-  [ $status -eq 0 ] && say "installed $install_dir/scribe ($tag; CPU tier: $tier)"
+  if [ $status -eq 0 ]; then
+    case "$target" in
+      *-unknown-linux-gnu) say "installed $install_dir/scribe ($tag; CPU tier: $tier)" ;;
+      *) say "installed $install_dir/scribe ($tag)" ;;
+    esac
+  fi
   return $status
 }
 

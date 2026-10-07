@@ -127,7 +127,15 @@ run_tier_case() {
   grep -Fx "https://github.com/FasalZein/scribe/releases/download/v99.0.0/scribe-99.0.0-$target$suffix.tar.gz" "$root/downloads" >/dev/null || {
     cat "$root/downloads" "$root/output"; echo "FAIL: expected $tier tier"; exit 1;
   }
-  grep -F "CPU tier: $tier" "$root/output" >/dev/null || { cat "$root/output"; exit 1; }
+  case "${TEST_OS:-Linux}" in
+    Linux) grep -F "CPU tier: $tier" "$root/output" >/dev/null || { cat "$root/output"; exit 1; } ;;
+    Darwin)
+      if grep -F 'CPU tier:' "$root/output" >/dev/null; then
+        cat "$root/output"; echo 'FAIL: macOS has no CPU tiers'; exit 1
+      fi
+      grep -Fx "installed $root/install/scribe (v99.0.0)" "$root/output" >/dev/null || { cat "$root/output"; exit 1; }
+      ;;
+  esac
   [ ! -f "$root/cargo-called" ]
   cmp "$root/good" "$root/install/scribe"
   [ "$(grep -c '[.]tar[.]gz$' "$root/downloads")" -eq 1 ]
