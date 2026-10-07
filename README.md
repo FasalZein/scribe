@@ -10,6 +10,17 @@ Install the skill for all your agents:
 npx skills add FasalZein/scribe -g -y --skill scribe
 ```
 
+For pi only:
+
+```sh
+npx skills add FasalZein/scribe -g -y --skill scribe -a pi
+```
+
+The skills CLI installs pi skills to `~/.agents/skills/scribe`, not `~/.pi/agent/skills/scribe`.
+Pi loads `~/.agents/skills` directly; no symlink is needed (verified with skills CLI 1.7.1 and pi 1.0.4).
+In a running pi session, run `/reload`, then `/skill:scribe` to load the instructions.
+See [pi's skill locations](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/skills.md).
+
 The first time the agent uses the skill, it runs the skill's `scripts/install.sh` (`scripts/install.ps1` on Windows). You can run it yourself from the installed skill directory:
 
 ```sh
