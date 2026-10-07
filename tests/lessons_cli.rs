@@ -303,3 +303,26 @@ fn check_accepts_inline_code_at_the_start_of_a_title() {
     );
     assert_success(fixture.run("check"));
 }
+
+#[test]
+fn frontmatter_that_is_not_yaml_is_rejected_and_not_finalized() {
+    // An X title holds ": "; unquoted, YAML readers such as Obsidian reject the frontmatter (F3).
+    let fixture = Fixture::new();
+    fixture.replace(
+        "title: Example",
+        "title: Lydia Hallie (@lydiahallie): A few of you asked",
+    );
+    let original = fs::read_to_string(fixture.0.join("lessons.md")).unwrap();
+    assert_error(fixture.run("check"), "frontmatter: not valid YAML");
+    assert_error(fixture.run("finalize"), "frontmatter: not valid YAML");
+    assert_eq!(
+        fs::read_to_string(fixture.0.join("lessons.md")).unwrap(),
+        original
+    );
+    // The quoted form that index.md writes is valid.
+    fixture.replace(
+        "title: Lydia Hallie (@lydiahallie): A few of you asked",
+        "title: \"Lydia Hallie (@lydiahallie): A few of you asked\"",
+    );
+    assert_success(fixture.run("check"));
+}

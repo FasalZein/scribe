@@ -70,7 +70,28 @@ pub(crate) fn read(path: &Path) -> Result<Vec<Lesson>> {
     Ok(summary.lessons)
 }
 
+/// Other tools (Obsidian, static site generators) read the frontmatter with a YAML parser, so
+/// it must parse as one YAML mapping. The line-based field checks below cannot see that.
+fn validate_yaml(document: &Document<'_>) -> Result<()> {
+    let text = document.frontmatter.join("\n");
+    let docs = yaml_rust2::YamlLoader::load_from_str(&text).map_err(|error| {
+        // The marker counts lines inside the frontmatter; the opening --- is line 1 of the file.
+        anyhow::anyhow!(
+            "frontmatter: not valid YAML at line {}: {}; quote a value that contains \": \" \
+             or starts with a special character, as index.md does",
+            error.marker().line() + 1,
+            error.info()
+        )
+    })?;
+    ensure!(
+        matches!(docs.as_slice(), [yaml_rust2::Yaml::Hash(_)]),
+        "frontmatter: not valid YAML: expected one mapping of key: value lines"
+    );
+    Ok(())
+}
+
 fn validate_frontmatter(document: &Document<'_>, summary: &Summary) -> Result<()> {
+    validate_yaml(document)?;
     let count = document
         .field("lessons:")?
         .parse::<usize>()
