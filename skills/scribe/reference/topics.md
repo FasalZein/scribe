@@ -19,12 +19,16 @@ Each slug is a section:
 - `existing note` means `topics/<slug>.md` is already there. `new note` means it is not.
 - `single-source` means one source uses the slug. `<n> sources` is the source count. A note that nothing currently uses is `existing note, 0 sources`. Leave that note in place on a routine run.
 - The links are relative to the library root. In a topic note, prefix `../`.
-- Near-duplicates are listed under `## Near-duplicate slugs` as `- <slug> / <other>`. One slug's full text is a prefix of the other, such as `agent-trust` / `agent-trustworthiness`. A shared word is not enough: `agent-trust` and `agent-verification` are not a pair. `None.` means there is no pair. A pair is a candidate to inspect, not a decision that the subjects are the same.
+- Near-duplicates are listed under `## Near-duplicate slugs` as `- <slug> / <other>`. One slug's full text is a prefix of the other, such as `agent-trust` / `agent-trustworthiness`. A shared word is not enough: `agent-trust` and `agent-verification` are not a pair. `None.` means there is no pair.
+- Read each listed pair against the lesson titles in the plan. Then apply one case. These cases cover two slugs that earlier sources already use. A new source that is about to add a slug follows **Reuse** instead.
+  - **Parent and child.** The longer slug is a narrower subject. A lesson under the longer slug does not always belong under the shorter slug. Example: `claude-code` / `claude-code-plugins`. Keep both slugs.
+  - **Same subject.** The titles under both slugs state one subject, so one note could cite every one of those lessons. Example: `agent-trust` / `agent-trustworthiness`. Keep both slugs until the user asks for a merge.
+- The list leaves out synonyms that use different words. Example: `context-management` / `context-window`.
 - The command reads every `lessons.md` in the library. A validation error names that file. An older heading such as `### L1. Title` fails here. When that source still has parts, fix the named file with [`lessons.md`](lessons.md), publish it with the step 5 commands, and rerun the plan. When the error is a missing part and the index says `parts: 0`, re-extraction cannot repair the file. Ask the user to move that `lessons.md` aside, as step 4 describes, and rerun the plan.
 
-**Reuse**: for a lesson on a new or re-extracted source, keep an existing slug when it fits. Inspect each flagged pair before you add a slug.
+**Reuse**: For a lesson on a new or re-extracted source, keep an existing slug when the subject is the same. Compare that slug with every slug heading, not only the listed pairs. The words may differ. A parent-and-child pair is not a reuse: add the narrower slug. Reuse does not merge two slugs that earlier sources already use.
 
-**Synonyms**: merge synonym slugs only when the user asks. A routine run leaves the slugs as they are. On request, keep the existing slug that fits best, or the clearer slug when neither note exists. Apply that slug in the affected lessons by editing a `lessons.draft.md` copy, then use the publish steps in `SKILL.md` step 5 so the current `lessons.md` stays in place until `lessons check` exits 0. Merge the affected topic notes, keep one note for the chosen slug, and rerun `<scribe> topics plan`.
+**Synonyms**: Merge synonym slugs only when the user asks. A routine run leaves the slugs as they are, whether or not the plan lists the pair. On request, compare the slug headings yourself. The near-duplicate list misses different words. Keep the existing slug that fits best, or the clearer slug when neither note exists. Apply that slug in the affected lessons by editing a `lessons.draft.md` copy, then use the publish steps in `SKILL.md` step 5 so the current `lessons.md` stays in place until `lessons check` exits 0. Merge the affected topic notes, keep one note for the chosen slug, and rerun `<scribe> topics plan`.
 
 Decide per topic slug on the new or re-extracted lessons:
 
