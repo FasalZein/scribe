@@ -29,3 +29,17 @@ ADR 0007's bar (at least 0.3 points lower aggregate WER) is not met: Ultra is 0.
 - Existing transcripts stay as they are. Their `model` frontmatter records the URL of the model that wrote them.
 - To keep v3, pass `-m https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf/resolve/90f082450fcbacdb54e5900c44ef697c9ea59622/parakeet-tdt-0.6b-v3-Q8_0.gguf`.
 - The release that ships this change is 0.2.0.
+
+## #22: Granite measurement and decision
+
+On 2026-10-07, the user kept Ultra Q8_0 as the single default after [#22](https://github.com/FasalZein/scribe/issues/22).
+Document Granite Speech 4.1 2B Q8_0 through `-m <url>` in the README for accuracy-first users. Add no automatic model selection.
+
+- LibriSpeech: 40 recordings, 29,236 reference words, Linux x86_64 AVX2. Granite scored 1.56% WER (455 errors) against Ultra's 2.02% (591 errors). The improvement of 0.465 percentage points exceeds the paired noise bound of 0.150 points.
+- Four TED talks: 9,273 reference words. Granite scored 2.93% against Ultra's 3.15% on M4 Pro Metal, and 2.94% against 3.18% on Linux arm64 dotprod. Both improvements (0.216 and 0.237 points) are within noise (bounds 0.277 and 0.278).
+- Granite took 128.3 s of engine time against Ultra's 36.5 s on Metal (3.5 times slower), and 865.9 s against 297.0 s on Linux arm64 (2.9 times slower). The Linux ratio is rough: Ultra's host load reached 13.7, and Granite's first talk followed swapped-out Qwen runs. Across Granite's other three talks, the ratio was 2.3 times.
+- Granite used about 5 GB RAM on both platforms and needs a 2.6 GB download (2,559,878,944 bytes). It gives no timestamps inside a 30 s chunk, so lesson and part timestamps are coarse.
+
+The documented URL pins Hugging Face revision `5fa89dfac74d52a186f63647553b9e1f7ae36e83`, file `granite-speech-4.1-2b-Q8_0.gguf`.
+scribe caches non-default URLs and records their downloaded size and SHA-256 for later integrity checks, but it has no expected hash pinned for them.
+The accuracy gain on LibriSpeech does not remove the speed, RAM, download, and timestamp costs. One default keeps the choice explicit.

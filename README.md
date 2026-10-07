@@ -118,6 +118,25 @@ Environment variables:
 
 scribe runs `uvx yt-dlp` (the cached version) when `uvx` is on PATH, and plain `yt-dlp` otherwise. When the cached version fails, scribe retries the call once with `uvx yt-dlp@latest`. It inherits yt-dlp's configuration, so put cookies for sites that need a login there.
 
+### Accuracy-first option: Granite Speech
+
+Parakeet Ultra Q8_0 stays the single default. For accuracy-first use, select Granite Speech 4.1 2B Q8_0 explicitly:
+
+```sh
+scribe talk.mp4 -m https://huggingface.co/handy-computer/granite-speech-4.1-2b-gguf/resolve/5fa89dfac74d52a186f63647553b9e1f7ae36e83/granite-speech-4.1-2b-Q8_0.gguf
+```
+
+In [#22](https://github.com/FasalZein/scribe/issues/22), Granite scored 1.56% word error rate (WER) against Ultra's 2.02% on LibriSpeech, better beyond the measured noise bound.
+On four TED talks, Granite was about 0.2 percentage points better, but within noise.
+It was roughly 3-4 times slower in the measured runs (3.5 times on Metal, about 2.9 times on Linux arm64), used about 5 GB RAM, and needs a 2.6 GB download.
+Granite has no timestamps inside a 30 s chunk, so transcript, lesson, and part timestamps are coarse.
+See [ADR 0008](docs/adr/0008-parakeet-ultra-single-default.md#22-granite-measurement-and-decision) for the measurements and limits.
+
+`-m` URLs use the same model cache, with a URL hash in the filename.
+scribe records the downloaded file's size and SHA-256 and checks later reuse against that record, with a `.verified` marker while size and modification time are unchanged.
+The Granite URL pins a Hugging Face revision, but scribe has no expected SHA-256 pinned for non-default URLs.
+This cache check detects later changes; it does not authenticate the first download against a known hash.
+
 ## Library layout
 
 ```text
