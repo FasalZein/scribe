@@ -1,35 +1,53 @@
-# Extraction rules: lesson format 2
+# Extraction rules
 
 A **lesson** is one reusable piece of knowledge from a source. Restate it so it makes sense without the transcript.
 
-## Read and append
+Write `lessons.draft.md` in the source folder. Leave `lessons.md` unchanged. The main agent publishes it after `lessons check` exits 0. Until that check passes, the existing `lessons.md` stays as it is.
 
-1. Read `index.md`: frontmatter, Sources, Chapters, the Parts table, Known terms and Low-confidence passages.
-2. Read the topics index named under "Existing topics" in your brief, if it exists. Reuse an existing topic slug when it fits.
-3. Read every part in order. Use the file names in the Parts table. Sources without chapters use `parts/NN.md`. Chapter parts use `parts/NN-<part>.md`, where `<part>` is the chapter slug. A chapter split into several parts adds a piece number, for example `parts/02-long-chapter-1.md`.
-4. Create the frontmatter below, then append each part's lessons after reading that part. Continue numbering across parts. Leave `lessons` and frontmatter `topics` for `scribe lessons finalize` to compute.
-5. After reading every part, write the Focus answer when a focus is set. Then finalize and check the file as described under Done.
+`<scribe>` is the absolute path in your brief. Use it for every scribe command. A different `scribe` on PATH can be older.
 
-The transcript has no speaker labels. Identify speakers from Sources, the title, self-introductions and cues such as "as Armin said". You may name the person behind a public handle from your own knowledge; add `(inferred)` in `speakers`. Add `(inferred)` in `who` when attribution is a guess. Write `speaker` when there is no cue.
+## Read
 
-Speech recognition can mishear names and terms. The transcript keeps the words as the engine heard them; never edit it. Use two sections of `index.md` to write names correctly in lessons:
+1. Read `index.md`: frontmatter, Sources, Chapters, the Parts table, Known terms, and Low-confidence passages.
+2. Read the topics index from your brief when it exists. Reuse an existing topic slug when it fits the subject. Add a new slug only when none fits.
+3. Read every part in order. Use the file names in the Parts table. A source with no chapters uses `parts/NN.md`. A chapter part uses `parts/NN-<chapter>.md`. A chapter split into several parts adds a piece number, for example `parts/02-long-chapter-1.md`.
 
-- **Known terms** lists handles and names from the source's metadata. When a transcript word sounds like a known term, write the known term in the lesson. Example: the transcript says "Potato" and the known terms list `poteto`.
-- **Low-confidence passages** lists spans the engine scored as doubtful, each with a timestamp link to its part. Doubtful words are in bold. Before you quote a passage or name a term from it, check it against the context and the known terms. Do not quote a passage you cannot resolve; restate it instead.
+The transcript has no speaker labels. Name speakers from Sources, the title, self-introductions, and cues such as "as Armin said". You may name the person behind a public handle from your own knowledge. Add `(inferred)` in `speakers`, and in `who` when the attribution is a guess. Write `speaker` when there is no cue.
 
-A mishearing can also score high, so a word outside these passages can still be wrong. Record each unresolved spelling under Open questions.
+Speech recognition mishears names. The transcript keeps the words the engine heard. Do not edit the transcript. Use two sections of `index.md` when you write a name in a lesson:
 
-Write lessons in English. Keep an optional quote in the source language. If the transcript has no readable speech, write no lessons and report `no usable speech: <reason>`.
+- **Known terms** lists handles and names from the source metadata. When a transcript word sounds like a known term, write the known term. Example: the transcript says "Potato" and the known terms include `poteto`.
+- **Low-confidence passages** lists spans the engine scored as doubtful. Each span has a timestamp link to its part, and the doubtful words are in bold. Before you quote a passage or take a term from it, check the context and the known terms. When you cannot resolve a passage, restate it and skip the quote.
+
+A mishearing can also score high. Record each unresolved spelling under Open questions.
+
+Write lessons in English. Keep an optional quote in the source language. When the transcript has no usable speech, write no lessons. Put `no usable speech: <reason>` under Open questions and report that line.
+
+## Resume
+
+A long source can outlast one context. The draft is the resume point.
+
+After you finish reading a part, append that part's lessons to `lessons.draft.md`. Then set the last section to the next part:
+
+```markdown
+## Resume
+
+next: parts/04.md
+```
+
+On a later run, read the lessons already in the draft, then read parts from `next:` onward. Keep the existing lesson numbers. When every part in the Parts table has been read, remove the `## Resume` section.
+
+When you cannot continue, leave the draft in place, leave `lessons.md` unchanged, and reply `partial: <next part path>`. Run `lessons finalize` only after every part has been read and `## Resume` is gone.
 
 ## Select
 
-Keep knowledge that will help months later: an assertion with its reasons, an explanation, complete steps, a rule of thumb, a comparison, or an example. Leave out greetings, banter, sponsor reads, repetition and promises without content.
+Keep knowledge that will still help months later: an assertion and its reasons, an explanation, complete steps, a rule of thumb, a comparison, or an example. Leave out greetings, banter, sponsor reads, repetition, and promises that have no content.
 
-When a **focus** is set, answer it from the lessons. Also capture the source's other lasting knowledge.
+When a **focus** is set, answer it from the lessons. Also keep the source's other lasting knowledge.
 
-## Write `lessons.md`
+## Write the draft
 
-Use flat frontmatter fields. Write frontmatter `topics` as a comma-separated list in brackets; the finalizer writes this list for you.
+Create this frontmatter first, then append lessons. Omit `lessons:` and the frontmatter `topics:` list. `lessons finalize` writes both.
 
 ```markdown
 ---
@@ -45,7 +63,7 @@ extracted_at: <RFC 3339 time>
 
 ## Focus answer
 
-<Only when a focus is set: 2-6 sentences, each pointing to lesson IDs, for example (L3, L7).>
+<Only when a focus is set: 2-6 sentences. Point each sentence at lesson ids, for example (L3, L7).>
 
 ## Lessons
 
@@ -58,33 +76,33 @@ extracted_at: <RFC 3339 time>
 - topics: <slug>, <slug>
 - verify: <what to check, and where; omit when not needed>
 
-<Restate the lesson with its reasons, conditions, exceptions and uncertainty.>
+<Restate the lesson with its reasons, conditions, exceptions, and uncertainty.>
 
 > "<At most one exact sentence, when the wording itself matters.>"
 
 ## Open questions
 
-- <Unclear terms, possible misrecognitions, conflicting claims or unresolved questions.>
+- <Unclear terms, possible misrecognitions, conflicting claims, or unresolved questions.>
 ```
 
 ### Anchors and titles
 
-Use `### L<n>` alone, starting at L1 and increasing by one. Put the title on the next line. Link to a lesson with `lessons.md#l<n>`, for example `lessons.md#l1`. A title change leaves this anchor unchanged. Format 1 headings such as `### L1. Title` do not pass the checker.
+Each heading is `### L<n>` alone, from L1, increasing by one. The title is the next line. Link a lesson as `lessons.md#l<n>`, for example `lessons.md#l1`. A title change leaves the anchor in place. A heading such as `### L1. Title` does not pass `lessons check`.
 
 ### Kinds and bodies
 
-Choose one of these six kinds:
+Use one of these kinds:
 
 | Kind | Use for |
 | --- | --- |
 | `claim` | An assertion or opinion, with its reasons. |
 | `explanation` | How or why something works. |
-| `procedure` | Complete numbered steps someone can follow. Include amounts, conditions and stopping criteria where needed. |
+| `procedure` | Complete numbered steps someone can follow, with amounts, conditions, and a stopping point where the source gives them. |
 | `heuristic` | A rule of thumb, with the conditions where it helps. |
-| `trade-off` | Options and their costs or benefits. |
-| `example` | A concrete case that illustrates reusable knowledge. |
+| `trade-off` | Options and what each one costs or gains. |
+| `example` | A concrete case that shows reusable knowledge. |
 
-A procedure body uses numbered steps from 1 in order:
+A procedure body numbers its steps from 1, in order:
 
 ```markdown
 ### L2
@@ -95,33 +113,37 @@ Thicken a wet mixture gradually
 - at: [00:10:00](parts/02-mixing.md)
 - topics: cooking
 
-1. Add 10 g flour if the mixture runs off the spoon.
+1. Add 10 g flour when the mixture runs off the spoon.
 2. Stir for 30 seconds, then check the texture again.
 3. Repeat until the mixture coats the spoon.
 ```
 
-Keep one idea per lesson. Split a passage that makes two points. Keep related measurements about one product or benchmark together. Use Mermaid fenced code blocks when a diagram helps. The checker ignores lesson-like text inside code fences.
+Keep one idea in each lesson. Split a passage that makes two points. Keep related measurements of one product together. A Mermaid fence is allowed when a diagram helps. `lessons check` ignores lesson-like text inside a code fence, and it rejects an unclosed fence.
 
-The checker verifies numbered procedure steps, not whether they are complete or correct. Check completeness against the source yourself.
+`lessons check` checks that procedure steps are numbered from 1. It does not check that the steps are complete. You check completeness against the source.
 
 ### Metadata
 
-- **who**: Name the speaker for every lesson. Write `A and B` when speakers build the point together. Attribute opinions in the body, for example "X argues...".
-- **at**: Use the exact `[hh:mm:ss]` timestamp at the start of the transcript paragraph. Link to its part file relative to `lessons.md`. Use the first paragraph when a lesson draws on several paragraphs. A time mentioned only in prose is not a citation timestamp.
-- **topics**: Write 1-3 comma-separated lower-kebab slugs. Name subjects, not sources: `durable-execution`, not `pi-durable-talk`. Reuse a slug from the existing topics index when one fits.
-- **verify**: Add this optional bullet when a fact needs evidence beyond the transcript, such as a benchmark or product capability. Name what to check and where. Omit it otherwise.
+- **who**: Name the speaker. Write `A and B` when speakers build one point together. Attribute an opinion in the body, for example "X argues...".
+- **at**: Use the `[hh:mm:ss]` timestamp on the transcript paragraph where the lesson starts. The part file must contain that timestamp at the start of a line, followed by a space. Link the part relative to the source folder. When a lesson uses several paragraphs, cite the first. A time written only in prose is not a citation.
+- **topics**: One to three topic slugs, separated by commas. A slug is lowercase words of letters and digits, joined by single hyphens, for example `durable-execution`. Name the subject, not the source. Reuse a slug from the topics index when one fits.
+- **verify**: Add this optional bullet when a fact needs evidence outside the transcript, such as a benchmark or a product limit. Name what to check and where. Omit the bullet otherwise.
 
-## Done
+## Ready for publish
 
-Run these commands after every part is read and the lessons are complete:
+The draft is ready when every part in the Parts table has been read, `## Resume` is gone, the source frontmatter is present, and the Focus answer is present when a focus was set.
+
+Run:
 
 ```sh
-scribe lessons finalize <path/to/lessons.md>
-scribe lessons check <path/to/lessons.md>
+<scribe> lessons finalize <path/to/lessons.draft.md>
+<scribe> lessons check <path/to/lessons.draft.md>
 ```
 
-`finalize` validates lesson bodies and citations before replacing the file. It writes the `lessons:` count and the sorted, unique `topics:` list. It preserves other frontmatter fields and the body. A body-only draft also works, but you must add source metadata yourself.
+`lessons finalize` checks the lesson bodies and citations, then writes `lessons:` and the sorted unique `topics:` list. It keeps your other frontmatter fields and the body. When validation fails, finalize leaves the draft unchanged. `lessons check` only reads. It checks the count, the anchors, the title lines, the required fields, the kinds, the procedure step numbers, the topic list, the part links, and the paragraph timestamps.
 
-`check` reads without writing. It validates the count, sequential anchors, title lines, required metadata, kinds, numbered procedure steps, topic list, part links and exact paragraph timestamps. Both commands exit 0 on success. They exit nonzero and print `scribe: <reason>` on failure. Neither command loads a model or calls an LLM.
+Both commands exit 0 on success. On failure they exit nonzero and print `scribe: <reason>` on stderr. Neither command loads a model.
 
-Fix every reported error, then rerun both commands. Completion requires a successful check, every part read, and source conditions preserved in the lessons and Focus answer.
+Fix every reported error and run both commands again. Then return. The main agent replaces `lessons.md` with the draft only after its own `lessons check` exits 0.
+
+Your extraction is complete when every part is accounted for and `lessons check` on the draft exits 0, or when the draft still holds `## Resume` and your reply names that next part.
