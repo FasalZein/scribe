@@ -108,8 +108,15 @@ For each index, read frontmatter `title`, `parts`, and `words`. Give the source 
 
 1. **no speech**: `parts: 0`. Do not extract it. When `lessons.md` exists, run `<scribe> lessons check` on it. When that check exits 0, or when `lessons.md` is absent, name the source in the report. When the check fails, name the source and the `scribe:` error. Before step 6, ask the user whether to move `lessons.md` aside, for example to `lessons.stale.md`, and to remove topic-note bullets that link to it. Until that file is moved aside, `topics plan` and `topics index` fail for the whole library.
 2. **extract**: `lessons.draft.md` exists, or the user asked to redo the source, or this run used `--force` and step 3 counted the parts as changed. When the user asks to redo a source, remove its `lessons.draft.md` once, before step 5. Leave a draft that step 5 has already written.
-3. **extract**: `lessons.md` is absent, or `<scribe> lessons check <lessons.md>` exits non-zero.
+3. **extract**: `lessons.md` is absent, or `<scribe> lessons check <lessons.md>` exits non-zero and the repair below does not fix it.
 4. **already extracted**: `lessons check` exits 0.
+
+**Repair** an existing `lessons.md` when its `scribe:` error is one of these two. `lessons check` reports one error per run.
+
+- `frontmatter: not valid YAML at line <n>: ...`: put the value on file line `<n>` in double quotes. Write `\"` for a double quote inside it. For `title`, copy the `title:` line from `index.md`.
+- `### L<n>: - <key>: belongs in the metadata list under the title, not in the body`: move that line into the metadata list under the title of L<n>. Put `- verify:` last.
+
+Repair a copy: copy `lessons.md` to `lessons.draft.md`, fix the copy, and run `<scribe> lessons check` on the copy. Repeat while the error is one of these two. When the check exits 0, publish the copy with the step 5 publish commands, and mark the source **already extracted**. When it reports another error, remove `lessons.draft.md` and mark the source **extract**.
 
 Done when each source has one mark.
 

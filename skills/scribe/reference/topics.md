@@ -30,7 +30,7 @@ Each slug is a section:
 
 **Synonyms**: Merge synonym slugs only when the user asks. A routine run leaves the slugs as they are, whether or not the plan lists the pair. On request, compare the slug headings yourself. The near-duplicate list misses different words. Merge a same-subject pair. Leave a parent-and-child pair as two slugs. For the pair you merge, keep the existing slug that fits best, or the clearer slug when neither note exists. Apply that slug in the affected lessons by editing a `lessons.draft.md` copy, then use the publish steps in `SKILL.md` step 5 so the current `lessons.md` stays in place until `lessons check` exits 0. Merge the affected topic notes, keep one note for the chosen slug, and rerun `<scribe> topics plan`. After that plan, apply the Decide rules below to the chosen slug. A merge can raise a single-source slug to two or more sources. When the plan says `new note` and two or more sources, create `topics/<topic-slug>.md` even when neither old slug had a note.
 
-Decide per topic slug on the new or re-extracted lessons. A source is re-extracted only when step 5 published a new `lessons.md` for it. A `--force` run whose parts were unchanged, and whose `lessons.md` already passes `lessons check`, is not a re-extracted source.
+Decide per topic slug on the new or re-extracted lessons. A source is re-extracted only when step 5 published a new `lessons.md` for it. A `--force` run whose parts were unchanged, and whose `lessons.md` already passes `lessons check`, is not a re-extracted source. A source whose `lessons.md` step 4 repaired is not a re-extracted source either.
 
 - **existing note**: merge.
 - **new note, two or more sources**: create `topics/<topic-slug>.md` and merge every lesson that uses the slug.
