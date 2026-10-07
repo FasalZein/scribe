@@ -25,6 +25,14 @@ The installer:
 - checks the installed version against the skill's version, and prints the `cargo install --tag` command when the latest release is older than the skill;
 - checks ffmpeg, ffprobe, and `uvx` or `yt-dlp`, and prints the install command (brew, apt, dnf, pacman or winget) for each missing tool. It never runs a package manager or sudo.
 
+Linux releases include a portable CPU asset and tuned assets (`-dotprod` and `-i8mm` on arm64, `-avx2` on x86_64).
+The installer reads `/proc/cpuinfo` and selects the highest supported tier across all listed CPUs.
+The arm64 tiers require dotprod and scalar/vector FP16; `i8mm` also requires integer matrix multiplication.
+The x86_64 tier requires SSE4.2, AVX, AVX2, FMA, F16C and BMI2. Missing or unreadable CPU flags select portable.
+It checks `--version` and `doctor` before replacement. A failed tuned asset retries portable before a source build.
+Set `SCRIBE_CPU_TIER=portable` to force the baseline on a new install or upgrade. A current installation stays unchanged.
+`SCRIBE_CPUINFO=<path>` injects CPU data for installer tests only. macOS and Windows keep their existing assets.
+
 It exits 0 when everything is ready. Run it again at any time; it changes nothing when scribe is current.
 
 The first transcription downloads the speech model, Parakeet Ultra Q8_0 (740 MB), into the platform cache directory, under `scribe/models/` (`~/Library/Caches/scribe/models/` on macOS, `~/.cache/scribe/models/` on Linux).

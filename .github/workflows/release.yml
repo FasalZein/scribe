@@ -6,7 +6,7 @@ on:
 permissions:
   contents: write
 env:
-  # Portable binaries: no -march=native from the build machine.
+  # Explicit CPU tiers: no -march=native from the build machine.
   TRANSCRIBE_CMAKE_ARGS: -DGGML_NATIVE=OFF
 jobs:
   build:
@@ -14,12 +14,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: macos-14, target: aarch64-apple-darwin, optional: false }
-          # manylinux_2_28 supplies AlmaLinux 8 (glibc 2.28) and gcc-toolset.
-          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, platform: linux/amd64, image: quay.io/pypa/manylinux_2_28_x86_64, optional: false }
-          - { os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu, platform: linux/arm64, image: quay.io/pypa/manylinux_2_28_aarch64, optional: false }
+          - { os: macos-14, target: aarch64-apple-darwin, suffix: '', optional: false }
+          # Linux tiers live here. Each gets a fresh build/cache in the same
+          # manylinux_2_28 image (AlmaLinux 8, glibc 2.28 and gcc-toolset).
+          # ggml enables x86 extensions by default even with GGML_NATIVE=OFF;
+          # disable them explicitly for a baseline that works on older CPUs.
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, suffix: '', platform: linux/amd64, image: quay.io/pypa/manylinux_2_28_x86_64, cpu_flags: '-DGGML_SSE42=OFF -DGGML_AVX=OFF -DGGML_AVX2=OFF -DGGML_FMA=OFF -DGGML_F16C=OFF -DGGML_BMI2=OFF', optional: false }
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, suffix: '-avx2', platform: linux/amd64, image: quay.io/pypa/manylinux_2_28_x86_64, cpu_flags: '-DGGML_SSE42=ON -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_BMI2=ON', optional: false }
+          - { os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu, suffix: '', platform: linux/arm64, image: quay.io/pypa/manylinux_2_28_aarch64, cpu_flags: '', optional: false }
+          - { os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu, suffix: '-dotprod', platform: linux/arm64, image: quay.io/pypa/manylinux_2_28_aarch64, cpu_flags: '-DGGML_CPU_ARM_ARCH=armv8.2-a+dotprod+fp16', optional: false }
+          - { os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu, suffix: '-i8mm', platform: linux/arm64, image: quay.io/pypa/manylinux_2_28_aarch64, cpu_flags: '-DGGML_CPU_ARM_ARCH=armv8.2-a+dotprod+fp16+i8mm', optional: false }
           # Windows is optional: a failed build does not block the release.
-          - { os: windows-latest, target: x86_64-pc-windows-msvc, optional: true }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, suffix: '', optional: true }
     runs-on: ${{ matrix.os }}
     continue-on-error: ${{ matrix.optional }}
     steps:
@@ -36,14 +42,15 @@ jobs:
             test "$skill" = "$version" || { echo "skills/scribe/SKILL.md version $skill != Cargo.toml $version"; exit 1; }
           fi
           echo "VERSION=$version" >> "$GITHUB_ENV"
-      - name: Build portable Linux binary
+      - name: Build Linux CPU tier
         if: runner.os == 'Linux'
         run: |
           docker run --rm --platform '${{ matrix.platform }}' \
+            -e CPU_FLAGS='${{ matrix.cpu_flags }}' \
             -v "$PWD:/src" -w /src '${{ matrix.image }}' bash -euo pipefail -c '
               curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
               export PATH=/root/.cargo/bin:$PATH
-              export TRANSCRIBE_CMAKE_ARGS="-DGGML_NATIVE=OFF -DTRANSCRIBE_USE_SYSTEM_BLAS=OFF"
+              export TRANSCRIBE_CMAKE_ARGS="-DGGML_NATIVE=OFF -DTRANSCRIBE_USE_SYSTEM_BLAS=OFF $CPU_FLAGS"
               # The crate manifest emits dylib=stdc++; rustc -l overrides its kind.
               # CXXSTDLIB is not read by this crate. gcc_eh resolves unwinding
               # before Rust can pull in libgcc_s; glibc itself stays dynamic.
@@ -84,7 +91,7 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         run: |
-          name=scribe-$VERSION-${{ matrix.target }}.tar.gz
+          name=scribe-$VERSION-${{ matrix.target }}${{ matrix.suffix }}.tar.gz
           mkdir dist
           cp target/release/scribe LICENSE dist/
           tar -czf "$name" -C dist scribe LICENSE
@@ -101,8 +108,8 @@ jobs:
           Get-Content "$name.sha256"
       - uses: actions/upload-artifact@v4
         with:
-          name: scribe-${{ matrix.target }}
-          path: scribe-*-${{ matrix.target }}.*
+          name: scribe-${{ matrix.target }}${{ matrix.suffix }}
+          path: scribe-*-${{ matrix.target }}${{ matrix.suffix }}.*
   release:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: build

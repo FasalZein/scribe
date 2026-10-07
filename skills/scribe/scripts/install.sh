@@ -4,7 +4,9 @@
 # - Installs scribe when it is missing or older than this skill's version:
 #   downloads the prebuilt binary for this OS and CPU from the latest GitHub
 #   Release, verifies SHA-256, --version and doctor before replacement in $SCRIBE_INSTALL_DIR
-#   (default ~/.local/bin). On any release failure, builds from source
+#   (default ~/.local/bin). Linux selects a CPU tier from /proc/cpuinfo;
+#   SCRIBE_CPU_TIER=portable forces the baseline for a new install or upgrade.
+#   A failed tuned asset retries portable. On any remaining failure, builds from source
 #   with cargo when cargo, cmake and a C++ compiler exist.
 # - Checks ffmpeg, ffprobe, and uvx or yt-dlp. Prints the install command for
 #   each missing tool. It never runs a package manager or sudo.
@@ -131,12 +133,56 @@ release_target() {
   esac
 }
 
+# Require the flags on every listed CPU, not just one core on a mixed CPU.
+# SCRIBE_CPUINFO injects a /proc/cpuinfo fixture for installer tests only.
+cpu_supports() {
+  [ -r "${SCRIBE_CPUINFO:-/proc/cpuinfo}" ] || return 1
+  awk -v required="$1" '
+    BEGIN { n = split(required, need, " ") }
+    /^[[:space:]]*(Features|flags)[[:space:]]*:/ {
+      seen = 1
+      flags = " " substr($0, index($0, ":") + 1) " "
+      gsub(/[[:space:]]+/, " ", flags)
+      for (i = 1; i <= n; i++) if (!index(flags, " " need[i] " ")) bad = 1
+    }
+    END { exit (!seen || bad) }
+  ' "${SCRIBE_CPUINFO:-/proc/cpuinfo}"
+}
+
+release_tier() {
+  if [ "${SCRIBE_CPU_TIER:-}" = portable ]; then say portable; return; fi
+  # Highest first. Keep the supported Linux tiers and their requirements here.
+  while read -r tier_target tier required; do
+    if [ "$1" = "$tier_target" ] && cpu_supports "$required"; then
+      say "$tier"; return
+    fi
+  done <<'EOF'
+aarch64-unknown-linux-gnu i8mm asimddp fphp asimdhp i8mm
+aarch64-unknown-linux-gnu dotprod asimddp fphp asimdhp
+x86_64-unknown-linux-gnu avx2 sse4_2 avx avx2 fma f16c bmi2
+EOF
+  say portable
+}
+
 # Downloads, verifies and installs the release binary. Returns 2 when no
 # release asset matches this machine, 1 on any other failure.
 install_release() {
   target=$(release_target) || { say "no prebuilt scribe for $(uname -s) $(uname -m)"; return 2; }
   tag=$(latest_tag) || { say "cannot find the latest release of $REPO (curl or wget and network needed)"; return 2; }
-  asset="scribe-${tag#v}-$target.tar.gz"
+  tier=$(release_tier "$target")
+  if install_release_tier "$tier"; then return 0; fi
+  if [ "$tier" != portable ]; then
+    say "CPU tier $tier failed; trying portable before a source build"
+    install_release_tier portable
+    return $?
+  fi
+  return 1
+}
+
+install_release_tier() {
+  tier=$1
+  suffix="-$tier"; [ "$tier" != portable ] || suffix=""
+  asset="scribe-${tag#v}-$target$suffix.tar.gz"
   base="https://github.com/$REPO/releases/download/$tag"
   tmp=$(mktemp -d) || return 1
   say "downloading $base/$asset"
@@ -155,7 +201,7 @@ install_release() {
   chmod 755 "$tmp/scribe" && publish_candidate "$tmp/scribe"
   status=$?
   rm -rf "$tmp"
-  [ $status -eq 0 ] && say "installed $install_dir/scribe ($tag)"
+  [ $status -eq 0 ] && say "installed $install_dir/scribe ($tag; CPU tier: $tier)"
   return $status
 }
 

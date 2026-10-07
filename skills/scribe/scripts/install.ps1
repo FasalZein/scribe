@@ -9,6 +9,7 @@
 #   each missing tool. It never runs a package manager.
 # Safe to run again. Exits 0 when everything is ready, 1 otherwise.
 $ErrorActionPreference = 'Stop'
+# Windows keeps one portable CPU asset; Linux-only CPU tiers do not apply here.
 $Repo = 'FasalZein/scribe'
 $SkillDir = Split-Path -Parent $PSScriptRoot
 $InstallDir = if ($env:SCRIBE_INSTALL_DIR) { $env:SCRIBE_INSTALL_DIR } else { Join-Path $HOME '.local\bin' }
