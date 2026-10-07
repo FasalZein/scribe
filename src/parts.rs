@@ -10,7 +10,10 @@ pub const TOKENS_PER_WORD: f64 = 1.33;
 /// A segment ends at the first true sentence end once it spans this many seconds.
 const SEGMENT_SECS: f64 = 20.0;
 /// A segment with no true sentence end ends before the word that would make it longer than this.
-const SEGMENT_MAX_SECS: f64 = 60.0;
+/// It is `SEGMENT_SECS` plus the longest true sentence measured (56.7 s, a field-run talk),
+/// rounded up, so a sentence that starts just before `SEGMENT_SECS` still ends its segment
+/// (ADR 0013, #21). Only a transcript without punctuation reaches it.
+const SEGMENT_MAX_SECS: f64 = 80.0;
 
 /// One paragraph of the transcript: a line of segments.jsonl and of transcript.md. It starts at
 /// its first word, so its timestamp marks the word it cites.
@@ -294,6 +297,19 @@ mod tests {
             ]
         );
         assert_eq!(segments[1].end, 45.0);
+    }
+    /// Field run of 0.3.0 (#21): a 56.7 s sentence started near the 20 s point of its segment,
+    /// so the 60 s limit cut it after "and". A sentence that long stays in one segment.
+    #[test]
+    fn a_long_sentence_near_the_segment_target_is_not_cut() {
+        let mut words = timed("We start with a short sentence of nine words.", 0.0, 2.0);
+        let long = vec!["and"; 56].join(" ") + " done.";
+        words.extend(timed(&long, 18.0, 1.0));
+        words.extend(timed("Next one here.", 75.0, 1.0));
+        let segments = segments(&words);
+        let ends: Vec<_> = segments.iter().map(|s| (s.start, s.end)).collect();
+        assert_eq!(ends, [(0.0, 75.0), (75.0, 78.0)]);
+        assert!(segments[0].text.ends_with("and done."));
     }
     #[test]
     fn a_full_stop_before_a_lowercase_word_is_not_a_cut() {

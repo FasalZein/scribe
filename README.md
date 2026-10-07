@@ -123,7 +123,7 @@ $SCRIBE_LIBRARY/
 ```
 
 - `index.md` is the completion marker. Every file is written to a temporary file and renamed, and `index.md` comes last, so an interrupted run leaves no index and the next run redoes the source.
-- A paragraph timestamp marks the first word of the paragraph. A paragraph starts at a sentence start, not at a chunk cut. Only speech with no sentence end for 60 s gets a cut at a word boundary.
+- A paragraph timestamp marks the first word of the paragraph. A paragraph starts at a sentence start, not at a chunk cut. Only speech with no sentence end for 80 s gets a cut at a word boundary.
 - A part ends at a chapter start, or at the first sentence end after about 2,500 words. A full stop before a lowercase word is not a sentence end.
 - The `index.md` frontmatter key `hard_cuts` counts the chunk cuts made at the chunk length limit because no quiet point was found. Such a cut can split a word.
 - Each row of the Parts table gives the time range, the word count, `tokens_estimate` (`round(words × 1.33)`) and the first 12 words.
