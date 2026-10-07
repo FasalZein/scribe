@@ -2,7 +2,7 @@
 name: scribe
 description: Transcribe spoken media into a knowledge library and extract its lessons. Use when given a video, podcast, X post, playlist, channel or local media file to learn from; when the user wants only a transcript; when merging lessons into topic notes; or when answering a question from saved lessons and topic notes.
 metadata:
-  version: "0.3.0"
+  version: "0.3.1"
 allowed-tools:
   - Bash(sh *scripts/install.sh)
   - Bash(PATH=* sh *scripts/install.sh)
