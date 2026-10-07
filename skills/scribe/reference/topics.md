@@ -35,7 +35,7 @@ Decide per topic slug on the new or re-extracted lessons. A source is re-extract
 - **existing note**: merge.
 - **new note, two or more sources**: create `topics/<topic-slug>.md` and merge every lesson that uses the slug.
 - **new note, single-source**: do not create a note.
-- **Re-extracted source**: also merge every topic note that links to its source folder, including a note whose slug the new lessons dropped. Search the topic notes for that folder.
+- **Re-extracted source**: also merge every topic note that links to its source folder, including a note whose slug the new lessons dropped. Search every `topics/*.md` file except `topics/INDEX.md` for that folder. `INDEX.md` is generated. It is not a topic note.
 
 The plan is complete when every affected slug has its lessons and its re-extracted sources identified.
 
