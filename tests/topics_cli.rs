@@ -204,3 +204,60 @@ fn lesson_links_encode_source_folder_delimiters() {
             .contains("[L1](../sources/source%20%28one%29%231%25/lessons.md#l1)")
     );
 }
+
+#[test]
+fn index_rejects_topic_note_links_to_missing_lessons_parts_and_timestamps() {
+    let f = Fixture::new();
+    f.source("source (one)", &["learning"]);
+    let note = f.0.join("topics/learning.md");
+    let index = f.0.join("topics/INDEX.md");
+    fs::write(&index, "keep this index").unwrap();
+    let source = "../sources/source%20%28one%29";
+    let write = |lesson: &str, part: &str, time: &str| {
+        fs::write(
+            &note,
+            format!(
+                "---\ntopic: learning\n---\n\n# Learning\n\nHow people learn.\n\n## Lessons\n\n- Speaker [L1]({source}/lessons.md#{lesson}) at [{time}]({source}/{part}); see [the web](https://example.com/x#y).\n\n```markdown\n[ignored](missing.md)\n```\n"
+            ),
+        )
+        .unwrap();
+    };
+    write("l1", "parts/01.md", "00:00:05");
+    success(f.run("index"));
+    fs::write(&index, "keep this index").unwrap();
+    for (lesson, part, time, link, reason) in [
+        (
+            "l99",
+            "parts/01.md",
+            "00:00:05",
+            "lessons.md#l99",
+            "no ### L99 heading",
+        ),
+        (
+            "l1",
+            "parts/09.md",
+            "00:00:05",
+            "parts/09.md",
+            "missing file",
+        ),
+        (
+            "l1",
+            "parts/01.md",
+            "00:00:06",
+            "parts/01.md",
+            "no paragraph starts with [00:00:06]",
+        ),
+    ] {
+        write(lesson, part, time);
+        let output = f.run("index");
+        assert!(!output.status.success());
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            error.contains(note.to_str().unwrap())
+                && error.contains(&format!("broken link {source}/{link}"))
+                && error.contains(reason),
+            "{error}"
+        );
+        assert_eq!(fs::read_to_string(&index).unwrap(), "keep this index");
+    }
+}

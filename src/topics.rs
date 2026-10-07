@@ -185,8 +185,136 @@ fn citation_links(topic: &Topic) -> String {
         .join(", ")
 }
 
+/// Undo `link_path` and any other percent-encoding in a relative link path.
+fn percent_decode(path: &str) -> String {
+    let bytes = path.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && let Some(byte) = path
+                .get(i + 1..i + 3)
+                .and_then(|hex| u8::from_str_radix(hex, 16).ok())
+        {
+            decoded.push(byte);
+            i += 3;
+        } else {
+            decoded.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&decoded).into_owned()
+}
+
+/// The `[text](target)` links on one line.
+fn line_links(line: &str) -> Vec<(&str, &str)> {
+    let mut links = Vec::new();
+    let mut from = 0;
+    while let Some(offset) = line[from..].find("](") {
+        let close = from + offset;
+        let start = close + 2;
+        let Some(length) = line[start..].find(')') else {
+            break;
+        };
+        if let Some(open) = line[..close].rfind('[') {
+            links.push((&line[open + 1..close], &line[start..start + length]));
+        }
+        from = start + length + 1;
+    }
+    links
+}
+
+/// Why a relative link in a topic note does not resolve, or None when it does. A `#l<n>`
+/// fragment needs a `### L<n>` heading, and link text `hh:mm:ss` needs a paragraph that starts
+/// with `[hh:mm:ss]`, as in a lesson's `at:` link. Other fragments are not checked: GitHub and
+/// Obsidian compute heading anchors differently.
+fn broken(dir: &Path, text: &str, path: &str, fragment: Option<&str>) -> Option<String> {
+    let file = dir.join(percent_decode(path));
+    if !file.is_file() {
+        return Some("missing file".to_owned());
+    }
+    let lesson = fragment
+        .and_then(|f| f.strip_prefix('l'))
+        .filter(|n| !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit()));
+    let time = text.len() == 8
+        && text.bytes().enumerate().all(|(i, c)| {
+            if i % 3 == 2 {
+                c == b':'
+            } else {
+                c.is_ascii_digit()
+            }
+        });
+    if lesson.is_none() && !time {
+        return None;
+    }
+    let Ok(content) = fs::read_to_string(&file) else {
+        return Some("unreadable file".to_owned());
+    };
+    if let Some(n) = lesson {
+        let heading = format!("### L{n}");
+        if !content.lines().any(|line| line.trim_end() == heading) {
+            return Some(format!("no {heading} heading"));
+        }
+    }
+    let prefix = format!("[{text}] ");
+    if time && !content.lines().any(|line| line.starts_with(&prefix)) {
+        return Some(format!("no paragraph starts with [{text}]"));
+    }
+    None
+}
+
+/// Every relative link in the note that does not resolve, one message each. Links inside code
+/// fences and links with a URL scheme are skipped.
+fn broken_links(note: &Path) -> Result<Vec<String>> {
+    let text =
+        fs::read_to_string(note).with_context(|| format!("cannot read {}", note.display()))?;
+    let dir = note.parent().unwrap_or_else(|| Path::new("."));
+    let mut errors = Vec::new();
+    let mut fence: Option<&str> = None;
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        let marker = ["```", "~~~"].into_iter().find(|m| trimmed.starts_with(m));
+        if let Some(marker) = marker {
+            match fence {
+                None => fence = Some(marker),
+                Some(open) if open == marker => fence = None,
+                Some(_) => {}
+            }
+            continue;
+        }
+        if fence.is_some() {
+            continue;
+        }
+        for (label, target) in line_links(line) {
+            let target = target.trim();
+            let target = target
+                .strip_prefix('<')
+                .and_then(|t| t.split_once('>'))
+                .map_or_else(|| target.split(' ').next().unwrap_or(""), |(t, _)| t);
+            if target.is_empty() || target.starts_with('#') || target.contains(':') {
+                continue;
+            }
+            let (path, fragment) = target
+                .split_once('#')
+                .map_or((target, None), |(p, f)| (p, Some(f)));
+            if let Some(reason) = broken(dir, label, path, fragment) {
+                errors.push(format!(
+                    "{}: broken link {target}: {reason}",
+                    note.display()
+                ));
+            }
+        }
+    }
+    Ok(errors)
+}
+
 pub fn index(library: &Path) -> Result<PathBuf> {
     let topics = collect(library)?;
+    let mut errors = Vec::new();
+    for note in topics.values().filter_map(|topic| topic.note.as_ref()) {
+        errors.extend(broken_links(note)?);
+    }
+    ensure!(errors.is_empty(), "{}", errors.join("\n"));
     let mut output = String::from("# Topics\n\n");
     for (slug, topic) in &topics {
         if let Some(note) = &topic.note {
