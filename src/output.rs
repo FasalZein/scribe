@@ -160,14 +160,17 @@ pub fn directory(root: &Path, meta: &Metadata) -> Result<PathBuf> {
             return Ok(std::path::absolute(path)?);
         }
     }
-    // Legacy folders have no ID or suffix. Match the source string independently of the
-    // current title: a new X title cut must not orphan the earlier transcript and lessons.
+    // Legacy folders have no suffix. Some store the ID; older ones store only the source, so
+    // match it independently of the current title: a new X title cut must not orphan the
+    // earlier transcript and lessons.
     for entry in fs::read_dir(root)? {
         let legacy = entry?.path();
         if !entry_name_is_transaction(&legacy)
             && legacy.join("index.md").is_file()
-            && stored(&legacy)
-                .is_some_and(|m| m["id"].is_null() && m["source"] == meta.source.as_str())
+            && stored(&legacy).is_some_and(|m| {
+                m["id"] == meta.id.as_str()
+                    || (m["id"].is_null() && m["source"] == meta.source.as_str())
+            })
         {
             return Ok(std::path::absolute(legacy)?);
         }
@@ -713,6 +716,33 @@ mod tests {
         assert_ne!(
             directory(&root, &other).unwrap(),
             std::path::absolute(&legacy).unwrap()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn folder_with_the_id_but_no_suffix_is_reused() {
+        // An older scribe stored the ID in meta.json but named the folder without the suffix.
+        let root = temp_root("id-no-suffix");
+        let old = root.join("20261005-pi-welcome-today-badlogic");
+        fs::create_dir_all(&old).unwrap();
+        fs::write(old.join("index.md"), "done").unwrap();
+        fs::write(
+            old.join("meta.json"),
+            r#"{"id":"x:1","source":"https://example.com/x:1"}"#,
+        )
+        .unwrap();
+        let shorter_title = meta("x:1", "Pi welcome", Some("20261005"));
+        assert_eq!(
+            directory(&root, &shorter_title).unwrap(),
+            std::path::absolute(&old).unwrap()
+        );
+        assert_eq!(
+            names(&root),
+            [
+                ".scribe-publication.lock",
+                "20261005-pi-welcome-today-badlogic"
+            ]
         );
         fs::remove_dir_all(root).unwrap();
     }
