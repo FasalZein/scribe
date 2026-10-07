@@ -41,6 +41,8 @@ fn process(
     let terminal = std::io::stderr().is_terminal();
     let (meta, media) = timings.time("metadata", || fetch::media(input, cli.audio_stream))?;
     let dir = output::directory(&cli.output_root()?, &meta)?;
+    // A failed first run must not leave an empty source folder behind.
+    let _cleanup = output::EmptyFolderGuard(&dir);
     let index = dir.join("index.md");
     if index.exists() && !cli.force {
         crate::progress::line!("skip: {} exists (use --force)", index.display());

@@ -206,6 +206,23 @@ pub fn directory(root: &Path, meta: &Metadata) -> Result<PathBuf> {
     Ok(std::path::absolute(dir)?)
 }
 
+/// Removes the source folder on drop when it is still empty, so a run that fails before its
+/// first publication leaves nothing behind. A folder with any file in it stays.
+pub struct EmptyFolderGuard<'a>(pub &'a Path);
+impl Drop for EmptyFolderGuard<'_> {
+    fn drop(&mut self) {
+        let Some(parent) = self.0.parent() else {
+            return;
+        };
+        // The lock keeps a concurrent publication from renaming into the folder meanwhile.
+        if let Ok(_lock) = publication_lock(parent)
+            && fs::read_dir(self.0).is_ok_and(|mut entries| entries.next().is_none())
+        {
+            let _ = fs::remove_dir(self.0);
+        }
+    }
+}
+
 fn entry_name_is_transaction(path: &Path) -> bool {
     path.file_name()
         .is_some_and(|name| name.to_string_lossy().starts_with(".scribe-"))

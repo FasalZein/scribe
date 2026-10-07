@@ -81,3 +81,39 @@ fn interrupted_force_is_restored_and_skipped_without_loading_a_model() {
     assert!(!stage.exists());
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn a_failed_first_run_leaves_no_source_folder() {
+    let root = std::env::temp_dir().join(format!("scribe-failed-first-run-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    // A video with no audio stream, like the X post in the e2e run (F1, F2).
+    let source = root.join("video.mp4");
+    let status = Command::new("ffmpeg")
+        .args(["-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i"])
+        .args(["testsrc=d=1:s=64x64:r=5", "-c:v", "mpeg4"])
+        .arg(&source)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let library = root.join("library");
+    for _ in 0..2 {
+        // The missing model fails the run without a download; the decode fails as well.
+        let output = Command::new(env!("CARGO_BIN_EXE_scribe"))
+            .arg(&source)
+            .arg("--out")
+            .arg(&library)
+            .arg("--model")
+            .arg(root.join("missing-model.gguf"))
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{output:?}");
+        let folders: Vec<_> = fs::read_dir(&library)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .filter(|name| !name.to_string_lossy().starts_with('.'))
+            .collect();
+        assert!(folders.is_empty(), "{folders:?}");
+    }
+    fs::remove_dir_all(root).unwrap();
+}
