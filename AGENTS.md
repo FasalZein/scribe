@@ -14,6 +14,7 @@ Rust CLI (`src/`) plus the agent skill in `skills/scribe/` (`SKILL.md`, `referen
 | `SCRIBE_TEST_MODEL=<gguf> SCRIBE_TEST_MEDIA=<mp4> scripts/linux-test.sh [arm64\|amd64]` | Linux CPU build, tests and a 3-minute end-to-end run in Docker. |
 | `sh scripts/tests/install-check.sh` | Offline installer checks: safe replacement, CPU tiers, portable fallback and override. `SCRIBE_CPUINFO` injects CPU data for tests only. |
 | `scripts/portable-check.sh <binary> [arm64\|amd64]` | Check the Linux release ELF floor (glibc ≤ 2.28, no BLAS or dynamic C++ runtime) and CPU backend in clean Docker images; not an inference test. |
+| `gh workflow run cpu-bench.yml\|cpu-wer.yml\|release.yml -R FasalZein/scribe --ref main` | Manual runs: x86 tier timing (about 26 min), x86 avx2-vs-portable WER on LibriSpeech (about 3 h), release builds without publishing. Score other WER runs with `scripts/wer-compare.py`. |
 | `git tag vX.Y.Z && git push origin vX.Y.Z` | Release: `.github/workflows/release.yml` builds and attaches the binaries. The tag must equal `version` in `Cargo.toml` and `metadata.version` in `skills/scribe/SKILL.md`; CI fails when they differ, and the installer reads the SKILL.md value. |
 
 ## Traps
@@ -24,3 +25,6 @@ Rust CLI (`src/`) plus the agent skill in `skills/scribe/` (`SKILL.md`, `referen
 - YouTube returns HTTP 403 now and then. scribe retries a failed cached `uvx yt-dlp` call once with `uvx yt-dlp@latest`; if that also fails, run scribe again before you treat it as a bug. Exclude such runs from benchmarks.
 - Benchmark decoder speed under a controlled load (busy loops), not on whatever the host runs: 8 decoder threads stall when the host is busy (ADR 0006).
 - Builds for other machines need `TRANSCRIBE_CMAKE_ARGS=-DGGML_NATIVE=OFF` (CI and release set it). A native build fails with GCC 12 in an OrbStack arm64 VM.
+- On x86_64, `GGML_NATIVE=OFF` still turns on AVX2/FMA/F16C. A build for CPUs without AVX2 also needs `-DTRANSCRIBE_X86_CONSERVATIVE=ON`, as the portable release asset uses.
+- When using several git worktrees: give each its own `target/` (`cp -c -R <main>/target <worktree>/target`). A shared `CARGO_TARGET_DIR` runs another worktree's test binaries.
+- Start OrbStack before `scripts/linux-test.sh` or `scripts/portable-check.sh`; `docker` hangs while it is down.
