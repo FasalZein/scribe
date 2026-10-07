@@ -126,12 +126,12 @@ Keep one idea in each lesson. Split a passage that makes two points. Keep relate
 
 - **who**: Name the speaker. Write `A and B` when speakers build one point together. Attribute an opinion in the body, for example "X argues...".
 - **at**: Use the `[hh:mm:ss]` timestamp on the transcript paragraph where the lesson starts. The part file must contain that timestamp at the start of a line, followed by a space. Link the part relative to the source folder. When a lesson uses several paragraphs, cite the first. A time written only in prose is not a citation.
-- **topics**: One to three topic slugs, separated by commas. A slug is lowercase words of letters and digits, joined by single hyphens, for example `durable-execution`. Name the subject, not the source. Reuse a slug from the topics index when one fits.
+- **topics**: One to three topic slugs, separated by commas. A slug is lowercase words of letters and digits, joined by single hyphens, for example `durable-execution`. Name the subject, not the source. Reuse a slug from the topics index when one fits. A slug names the source when both checks pass. It would sit on more than half of the lessons in this source. Every word of the slug appears in `title` or `uploader` in `index.md`, ignoring case and punctuation. Remove that slug from those lessons. When a lesson then has no slug, give it the narrower subject that lesson teaches. A subject may cover most lessons of one source when one of its words is absent from the title and the uploader.
 - **verify**: Add this optional bullet when a fact needs evidence outside the transcript, such as a benchmark or a product limit. Name what to check and where. Omit the bullet otherwise.
 
 ## Ready for publish
 
-The draft is ready when every part in the Parts table has been read, `## Resume` is gone, the source frontmatter is present, and the Focus answer is present when a focus was set.
+The draft is ready when every part in the Parts table has been read, `## Resume` is gone, the source frontmatter is present, and the Focus answer is present when a focus was set. Apply the source-name test in **topics** before this point.
 
 Run:
 
