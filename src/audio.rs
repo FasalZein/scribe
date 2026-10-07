@@ -187,11 +187,22 @@ pub fn decode_blocks(
     let expected = expected.filter(|secs| secs.is_finite() && *secs > 0.0);
     let strict = network || expected.is_none();
     let mut energy = 0.0;
-    let (samples, errors) = ffmpeg(input, network, stream, strict, MIX, |block| {
+    let decoded = ffmpeg(input, network, stream, strict, MIX, |block| {
         energy += squares(&block);
         sink(block)
-    })
-    .with_context(|| format!("cannot decode audio stream {stream}"))?;
+    });
+    let (samples, errors) = match decoded {
+        Ok(decoded) => decoded,
+        // ffmpeg's own report of a missing stream is five lines of option-parsing errors.
+        Err(error) => match audio_streams(input, network) {
+            Some(0) => anyhow::bail!("media has no audio stream"),
+            Some(count) if count <= stream => anyhow::bail!(
+                "cannot decode audio stream {stream}: the media has {count} audio streams, \
+                 counted from 0"
+            ),
+            _ => return Err(error.context(format!("cannot decode audio stream {stream}"))),
+        },
+    };
     check_complete(samples, expected).map_err(|error| {
         if errors.is_empty() {
             error
@@ -225,6 +236,30 @@ pub fn decode_blocks(
         );
     }
     Ok(samples)
+}
+
+/// The number of audio streams in the input, or None when ffprobe cannot tell. Only the failure
+/// path calls it, so a source with audio never pays for a second network read.
+fn audio_streams(input: &std::ffi::OsStr, network: bool) -> Option<usize> {
+    let mut command = std::process::Command::new("ffprobe");
+    command.args(["-v", "error"]);
+    if network {
+        command.args(["-rw_timeout", NETWORK_TIMEOUT_MICROS]);
+        command.args(["-protocol_whitelist", "https,tls,tcp"]);
+    }
+    let output = command
+        .args(["-select_streams", "a", "-show_entries", "stream=index"])
+        .args(["-of", "csv=p=0"])
+        .arg(input)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    output.status.success().then(|| {
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .count()
+    })
 }
 
 /// The ffmpeg options that mix all channels to mono, as ffmpeg's channel downmix does.
@@ -658,10 +693,30 @@ mod tests {
         let silence = decode(media.as_os_str(), false, 1, None).unwrap();
         assert_eq!(rms(&silence), 0.0);
         let error = decode(media.as_os_str(), false, 2, None).unwrap_err();
-        assert!(
-            format!("{error:#}").contains("cannot decode audio stream 2"),
-            "{error:#}"
+        assert_eq!(
+            format!("{error:#}"),
+            "cannot decode audio stream 2: the media has 2 audio streams, counted from 0"
         );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn a_video_without_audio_is_a_one_line_error_not_an_ffmpeg_dump() {
+        let dir = fixture_dir("video-only");
+        // The X post in the e2e run carried an h264 video stream and no audio stream.
+        let media = fixture(
+            &dir,
+            "video.mp4",
+            &[
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=d=1:s=64x64:r=5",
+                "-c:v",
+                "mpeg4",
+            ],
+        );
+        let error = decode(media.as_os_str(), false, 0, None).unwrap_err();
+        assert_eq!(format!("{error:#}"), "media has no audio stream");
         std::fs::remove_dir_all(dir).unwrap();
     }
     #[test]
