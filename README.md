@@ -61,7 +61,7 @@ Linux release binaries need glibc 2.28 or newer. That includes Debian 10+, Ubunt
 
 The arm64 medians are from a Linux container on an Apple Silicon host (OrbStack, 6 CPUs), one run at a time. The x86_64 medians are from an ubuntu-22.04 runner, one run at a time. An x86_64 CPU without AVX2 gets the portable build. That build took 266.03 s of engine time for a 300 s clip, about 0.9 times the length of the audio, so a long source takes about as long as the audio. Vulkan and CUDA are best effort. Build them from source.
 
-A CPU build needs about 3.3 GB of RAM for a 19-minute file. Linux arm64 portable peaked at 3.25 GB and dotprod at 3.28 GB on 19:10 of audio, in a container with 6 CPUs and 7 GB of RAM. Metal on an Apple M4 Pro peaked at about 1.3 GB for sources up to 109:46 (1.201 GB, 1.262 GB, and 1.279 GB). Both peaks are below 8 GB. These runs do not set a fixed memory limit. No Windows or x86_64 RSS figure is recorded. Decoded audio uses about 230 MB of disk per hour, in addition to the 740 MB model file.
+A CPU build needs about 3.3 GB of RAM for a 19-minute file. Linux arm64 portable peaked at 3.33 GB and dotprod at 3.36 GB on 19:10 of audio, in a container with 6 CPUs and 7 GB of RAM. Metal on an Apple M4 Pro peaked at about 1.3 GB for sources up to 109:46 (1.201 GB, 1.262 GB, and 1.279 GB). Both peaks are below 8 GB. These runs do not set a fixed memory limit. No Windows or x86_64 RSS figure is recorded. Decoded audio uses about 230 MB of disk per hour, in addition to the 740 MB model file.
 
 ## Use
 

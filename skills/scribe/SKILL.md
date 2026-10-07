@@ -95,7 +95,7 @@ For each source that succeeds or is skipped, stdout prints one absolute `index.m
 - **`--force`** redoes a transcript and keeps the existing `lessons.md`. Before you run `--force` on a source, remove its `lessons.draft.md`. Part boundaries can move. Re-extract that source in step 5.
 - **`--language <code>`** passes a language hint. The default model covers English and other European languages. Lessons stay in English.
 
-A long batch can outlast a shell timeout. Measured examples for 30 minutes of audio are about 15-20 s of engine time on an idle Apple Silicon Mac, and about 2.5 minutes on 6 CPU cores. A busy host can take several times longer. The first run also downloads the model (about 740 MB). Run scribe in the background and poll, or transcribe in smaller groups. A rerun skips finished sources.
+A long batch can outlast a shell timeout. Measured examples for 30 minutes of audio are about 15-20 s of engine time on an idle Apple Silicon Mac, about 1-2 minutes on 6 Linux arm64 cores, and about 5 minutes on an x86_64 CPU with AVX2. An x86_64 CPU without AVX2 takes about as long as the audio. A busy host can take several times longer. The first run also downloads the model (about 740 MB). Run scribe in the background and poll, or transcribe in smaller groups. A rerun skips finished sources.
 
 When a failure names the backend, a tool, or the model, run `<scribe> doctor` and include its output in the report.
 
