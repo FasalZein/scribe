@@ -326,3 +326,32 @@ fn frontmatter_that_is_not_yaml_is_rejected_and_not_finalized() {
     );
     assert_success(fixture.run("check"));
 }
+
+#[test]
+fn metadata_fields_after_the_lesson_body_are_rejected() {
+    // A verify: note written after the body is body text that a merge helper can miss (F11).
+    for (field, reason) in [
+        (
+            "- verify: check the date",
+            "L1: - verify: belongs in the metadata list",
+        ),
+        (
+            "- kind: example",
+            "L1: - kind: belongs in the metadata list",
+        ),
+    ] {
+        let fixture = Fixture::new();
+        fixture.replace(
+            "The speaker argues that conditions matter.\n",
+            &format!("The speaker argues that conditions matter.\n\n{field}\n"),
+        );
+        assert_error(fixture.run("check"), reason);
+        assert_error(fixture.run("finalize"), reason);
+    }
+    let fixture = Fixture::new();
+    fixture.replace(
+        "- topics: learning\n",
+        "- topics: learning\n- verify: check the date\n",
+    );
+    assert_success(fixture.run("check"));
+}

@@ -172,6 +172,9 @@ fn validate_body(body: &str, path: &Path) -> Result<Summary> {
     Ok(summary)
 }
 
+/// The keys of a lesson's metadata list, from reference/lessons.md.
+const METADATA_KEYS: [&str; 5] = ["- kind:", "- who:", "- at:", "- topics:", "- verify:"];
+
 fn validate_lesson(lines: &[&str], path: &Path, summary: &mut Summary) -> Result<()> {
     let id = lines[0];
     ensure!(
@@ -180,8 +183,25 @@ fn validate_lesson(lines: &[&str], path: &Path, summary: &mut Summary) -> Result
             .is_some_and(|title| !title.trim().is_empty() && !title.starts_with(['#', '-'])),
         "{id}: missing title on the next line"
     );
+    // Format 2 puts the metadata list right under the title. The same key further down is body
+    // text that a topic-note merge would not read as metadata.
+    let start = 2 + lines[2..]
+        .iter()
+        .take_while(|line| line.trim().is_empty())
+        .count();
+    let end = start
+        + lines[start..]
+            .iter()
+            .take_while(|line| line.starts_with("- "))
+            .count();
+    for line in lines[..start].iter().chain(&lines[end..]) {
+        if let Some(key) = METADATA_KEYS.iter().find(|key| line.starts_with(*key)) {
+            bail!("{id}: {key} belongs in the metadata list under the title, not in the body");
+        }
+    }
+    let metadata = &lines[start..end];
     let field = |key: &str| -> Result<&str> {
-        let values: Vec<_> = lines
+        let values: Vec<_> = metadata
             .iter()
             .filter_map(|line| line.strip_prefix(key))
             .collect();
