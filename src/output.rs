@@ -16,7 +16,24 @@ pub fn today() -> String {
         date.day()
     )
 }
+const TITLE_SLUG_CHARS: usize = 60;
+
 fn slug(title: &str) -> String {
+    // One extra character distinguishes a whole word at the cap from a partial word.
+    let mut slug = slug_prefix(title, TITLE_SLUG_CHARS + 1);
+    if let Some((end, next)) = slug.char_indices().nth(TITLE_SLUG_CHARS) {
+        slug.truncate(end);
+        if next.is_alphanumeric() && !slug.ends_with('-') {
+            if let Some(boundary) = slug.rfind('-') {
+                slug.truncate(boundary);
+            }
+            // No boundary: keep the capped first word rather than an empty name.
+        }
+    }
+    slug.trim_end_matches('-').to_owned()
+}
+
+fn slug_prefix(title: &str, cap: usize) -> String {
     let mut slug = String::new();
     for ch in title.chars().flat_map(char::to_lowercase) {
         if ch.is_alphanumeric() {
@@ -24,7 +41,7 @@ fn slug(title: &str) -> String {
         } else if !slug.is_empty() && !slug.ends_with('-') {
             slug.push('-');
         }
-        if slug.chars().count() >= 60 {
+        if slug.chars().count() >= cap {
             break;
         }
     }
@@ -500,7 +517,8 @@ fn low_confidence_section(words: &[Word], part_files: &[(f64, String)]) -> Strin
 fn part_filename(number: usize, part: &crate::parts::Part) -> String {
     let chapter = part
         .chapter
-        .map(|c| format!("-{}", slug(&c.title)))
+        // Keep the historical chapter cut so existing lesson links remain valid on --force.
+        .map(|c| format!("-{}", slug_prefix(&c.title, TITLE_SLUG_CHARS)))
         .unwrap_or_default();
     let piece = part.piece.map(|n| format!("-{n}")).unwrap_or_default();
     format!("{number:02}{chapter}{piece}.md")
@@ -650,6 +668,83 @@ mod tests {
         assert!(
             index.lines().any(|line| line == "model_load_secs: 0.0"),
             "{index}"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn new_source_folder_ends_at_a_whole_word() {
+        let root = temp_root("folder-whole-word");
+        let m = meta(
+            "x:2102050467505430555",
+            "lauren (@poteto): here's how i shipped 2,500 PRs last month to production",
+            Some("20260921"),
+        );
+        let dir = directory(&root, &m).unwrap();
+        assert_eq!(
+            dir.file_name().unwrap().to_str().unwrap(),
+            "20260921-lauren-poteto-here-s-how-i-shipped-2-500-prs-last-month-to-b6d9c10c"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn new_folder_slug_handles_the_cap_and_long_first_words() {
+        for (i, (title, expected)) in [
+            ("a".repeat(61), "a".repeat(60)),
+            ("界".repeat(61), "界".repeat(60)),
+            (format!("{} end", "a".repeat(60)), "a".repeat(60)),
+            (
+                format!("{} end", "a".repeat(56)),
+                format!("{}-end", "a".repeat(56)),
+            ),
+            (format!("{} ends", "a".repeat(56)), "a".repeat(56)),
+            (format!("{} ends", "a".repeat(59)), "a".repeat(59)),
+            (" !!! ".into(), "media".into()),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let root = temp_root(&format!("folder-cap-{i}"));
+            let m = meta("file:cap", &title, Some("20260101"));
+            let dir = directory(&root, &m).unwrap();
+            let name = dir.file_name().unwrap().to_str().unwrap();
+            assert_eq!(
+                name.rsplit_once('-').unwrap().0,
+                format!("20260101-{expected}")
+            );
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn existing_mid_word_folder_keeps_its_transcript_and_lessons() {
+        let root = temp_root("folder-old-cut");
+        let old = root
+            .join("20260921-lauren-poteto-here-s-how-i-shipped-2-500-prs-last-month-to-p-b6d9c10c");
+        let m = meta(
+            "x:2102050467505430555",
+            "lauren (@poteto): here's how i shipped 2,500 PRs last month to production",
+            Some("20260921"),
+        );
+        fs::create_dir_all(&old).unwrap();
+        publish(&old, &m, "hello");
+        fs::write(old.join("lessons.md"), "saved lessons").unwrap();
+        assert_eq!(
+            directory(&root, &m).unwrap(),
+            std::path::absolute(&old).unwrap()
+        );
+        assert_eq!(
+            fs::read_to_string(old.join("lessons.md")).unwrap(),
+            "saved lessons"
+        );
+        assert!(old.join("index.md").is_file());
+        assert_eq!(
+            fs::read_dir(&root)
+                .unwrap()
+                .filter(|e| e.as_ref().unwrap().path().is_dir())
+                .count(),
+            1
         );
         fs::remove_dir_all(root).unwrap();
     }
@@ -1012,13 +1107,16 @@ mod tests {
             },
             Chapter {
                 start_time: 20.0,
-                title: "Main Part".into(),
+                title: format!("Main {}", "a".repeat(61)),
             },
         ];
         publish(&dir, &m, "third");
         assert_eq!(
             names(&dir.join("parts")),
-            ["01-intro.md", "02-main-part.md"]
+            [
+                "01-intro.md".to_owned(),
+                format!("02-main-{}.md", "a".repeat(55))
+            ]
         );
         fs::remove_dir_all(root).unwrap();
     }
