@@ -27,7 +27,7 @@ Write lessons in English. Keep an optional quote in the source language. When th
 
 A long source can outlast one context. The draft is the resume point. A draft that is present belongs to the current transcript, and every later pass resumes from it.
 
-After you finish reading a part, append that part's lessons to `lessons.draft.md`. Then set the last section to the next part:
+After you finish reading one part, append that part's lessons to `lessons.draft.md`. Then set the last section to the next part, as below. Repeat that after every part, including a short part. One part is one update. `tokens_estimate` does not change the unit.
 
 ```markdown
 ## Resume
