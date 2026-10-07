@@ -27,8 +27,8 @@ done
 echo "$url" >>"$TEST_ROOT/downloads"
 if [ "${TEST_FALLBACK:-}" = yes ]; then
   case "$url:${TEST_TUNED_FAILURE:-doctor}" in
-    *-avx2.tar.gz:missing | *-i8mm.tar.gz:missing | *-dotprod.tar.gz:missing) exit 22 ;;
-    *-avx2.tar.gz.sha256:checksum | *-i8mm.tar.gz.sha256:checksum | *-dotprod.tar.gz.sha256:checksum) echo wrong >"$dest"; exit ;;
+    *-avx2.tar.gz:missing | *-dotprod.tar.gz:missing) exit 22 ;;
+    *-avx2.tar.gz.sha256:checksum | *-dotprod.tar.gz.sha256:checksum) echo wrong >"$dest"; exit ;;
   esac
   case "$url" in
     *-gnu.tar.gz) cp "$TEST_ROOT/portable.tar.gz" "$dest"; exit ;;
@@ -135,8 +135,8 @@ run_tier_case() {
 }
 # Raspberry Pi 5, Graviton 2 and Ampere Altra support dotprod/FP16, not i8mm.
 run_tier_case 'Features : fp asimd asimddp fphp asimdhp' dotprod
-# Graviton 3 also supports i8mm.
-run_tier_case 'Features : fp asimd asimddp fphp asimdhp i8mm' i8mm
+# Graviton 3 also supports i8mm, but ships the dotprod asset.
+run_tier_case 'Features : fp asimd asimddp fphp asimdhp i8mm' dotprod
 run_tier_case 'Features : fp asimd' portable
 run_tier_case 'Features : fp asimd asimddp fphp' portable
 run_tier_case 'Features : fp asimd asimddp asimdhp' portable
@@ -175,11 +175,10 @@ export TEST_ARCH=x86_64
 cp "$root/release.tar.gz" "$root/portable.tar.gz"
 cp "$root/release.sha256" "$root/portable.sha256"
 export TEST_FALLBACK=yes SOURCE_READY=no
-for tuned in avx2 dotprod i8mm; do
+for tuned in avx2 dotprod; do
   case "$tuned" in
     avx2) TEST_ARCH=x86_64; printf 'flags : sse4_2 avx avx2 fma f16c bmi2\n' >"$SCRIBE_CPUINFO"; target=x86_64-unknown-linux-gnu ;;
     dotprod) TEST_ARCH=aarch64; printf 'Features : asimddp fphp asimdhp\n' >"$SCRIBE_CPUINFO"; target=aarch64-unknown-linux-gnu ;;
-    i8mm) TEST_ARCH=aarch64; printf 'Features : asimddp fphp asimdhp i8mm\n' >"$SCRIBE_CPUINFO"; target=aarch64-unknown-linux-gnu ;;
   esac
   export TEST_ARCH
   for TEST_TUNED_FAILURE in doctor version missing checksum; do
@@ -215,7 +214,7 @@ done
 unset TEST_FALLBACK TEST_TUNED_FAILURE
 : >"$root/downloads"
 run_case doctor no
-grep -F '/scribe-99.0.0-aarch64-unknown-linux-gnu-i8mm.tar.gz' "$root/downloads" >/dev/null
+grep -F '/scribe-99.0.0-aarch64-unknown-linux-gnu-dotprod.tar.gz' "$root/downloads" >/dev/null
 grep -F '/scribe-99.0.0-aarch64-unknown-linux-gnu.tar.gz' "$root/downloads" >/dev/null
 echo 'PASS: tuned and portable doctor failures preserve old binary and exit 1'
 

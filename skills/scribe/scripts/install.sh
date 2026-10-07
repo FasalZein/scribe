@@ -157,7 +157,6 @@ release_tier() {
       say "$tier"; return
     fi
   done <<'EOF'
-aarch64-unknown-linux-gnu i8mm asimddp fphp asimdhp i8mm
 aarch64-unknown-linux-gnu dotprod asimddp fphp asimdhp
 x86_64-unknown-linux-gnu avx2 sse4_2 avx avx2 fma f16c bmi2
 EOF

@@ -18,12 +18,11 @@ jobs:
           # Linux tiers live here. Each gets a fresh build/cache in the same
           # manylinux_2_28 image (AlmaLinux 8, glibc 2.28 and gcc-toolset).
           # ggml enables x86 extensions by default even with GGML_NATIVE=OFF;
-          # disable them explicitly for a baseline that works on older CPUs.
-          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, suffix: '', platform: linux/amd64, image: quay.io/pypa/manylinux_2_28_x86_64, cpu_flags: '-DGGML_SSE42=OFF -DGGML_AVX=OFF -DGGML_AVX2=OFF -DGGML_FMA=OFF -DGGML_F16C=OFF -DGGML_BMI2=OFF', optional: false }
-          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, suffix: '-avx2', platform: linux/amd64, image: quay.io/pypa/manylinux_2_28_x86_64, cpu_flags: '-DGGML_SSE42=ON -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_BMI2=ON', optional: false }
+          # use the conservative option to disable every x86 SIMD tier by default.
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, suffix: '', platform: linux/amd64, image: quay.io/pypa/manylinux_2_28_x86_64, cpu_flags: '-DTRANSCRIBE_X86_CONSERVATIVE=ON', optional: false }
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, suffix: '-avx2', platform: linux/amd64, image: quay.io/pypa/manylinux_2_28_x86_64, cpu_flags: '-DGGML_SSE42=ON -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_BMI2=ON -DGGML_AVX_VNNI=OFF -DGGML_AVX512=OFF', optional: false }
           - { os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu, suffix: '', platform: linux/arm64, image: quay.io/pypa/manylinux_2_28_aarch64, cpu_flags: '', optional: false }
           - { os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu, suffix: '-dotprod', platform: linux/arm64, image: quay.io/pypa/manylinux_2_28_aarch64, cpu_flags: '-DGGML_CPU_ARM_ARCH=armv8.2-a+dotprod+fp16', optional: false }
-          - { os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu, suffix: '-i8mm', platform: linux/arm64, image: quay.io/pypa/manylinux_2_28_aarch64, cpu_flags: '-DGGML_CPU_ARM_ARCH=armv8.2-a+dotprod+fp16+i8mm', optional: false }
           # Windows is optional: a failed build does not block the release.
           - { os: windows-latest, target: x86_64-pc-windows-msvc, suffix: '', optional: true }
     runs-on: ${{ matrix.os }}

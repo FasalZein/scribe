@@ -25,9 +25,9 @@ The installer:
 - checks the installed version against the skill's version, and prints the `cargo install --tag` command when the latest release is older than the skill;
 - checks ffmpeg, ffprobe, and `uvx` or `yt-dlp`, and prints the install command (brew, apt, dnf, pacman or winget) for each missing tool. It never runs a package manager or sudo.
 
-Linux releases include a portable CPU asset and tuned assets (`-dotprod` and `-i8mm` on arm64, `-avx2` on x86_64).
+Linux releases include a portable CPU asset and tuned assets (`-dotprod` on arm64, `-avx2` on x86_64).
 The installer reads `/proc/cpuinfo` and selects the highest supported tier across all listed CPUs.
-The arm64 tiers require dotprod and scalar/vector FP16; `i8mm` also requires integer matrix multiplication.
+The arm64 tier requires dotprod and scalar/vector FP16, including on CPUs with i8mm.
 The x86_64 tier requires SSE4.2, AVX, AVX2, FMA, F16C and BMI2. Missing or unreadable CPU flags select portable.
 It checks `--version` and `doctor` before replacement. A failed tuned asset retries portable before a source build.
 Set `SCRIBE_CPU_TIER=portable` to force the baseline on a new install or upgrade. A current installation stays unchanged.
