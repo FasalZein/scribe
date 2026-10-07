@@ -49,15 +49,19 @@ scribe does not need browse-x. It calls the same API (`https://x.pcstyle.dev/api
 
 ## Platform support
 
-| Platform | Prebuilt binary | Backend | Measured speed |
-|---|---|---|---|
-| macOS, Apple Silicon | `aarch64-apple-darwin` | Metal | 27:26 video in 13.7 s (M4 Pro) |
-| Linux x86_64 (glibc 2.35+) | `x86_64-unknown-linux-gnu` | CPU | not measured natively; 3:00 clip in 72 s under Rosetta emulation |
-| Linux arm64 (glibc 2.35+) | `aarch64-unknown-linux-gnu` | CPU | 27:26 video in 135.6 s (OrbStack VM on the M4 Pro, 6 CPUs) |
-| Windows x86_64 | `x86_64-pc-windows-msvc`, when its release build succeeds | CPU | not tested |
-| macOS Intel, other | none; build from source | CPU | not tested |
+Linux release binaries need glibc 2.28 or newer. That includes Debian 10+, Ubuntu 20.04+, and RHEL 8+. The installer section above selects the Linux CPU tier. The engine times below are medians from separate clips. Read each time against its own clip.
 
-Speeds are wall times for one local file, including model load and decoding. Linux runs vary with host load: a 3:00 clip took 16.4 s and 16.9 s, and 162 s on a busier host. On the CPU, memory peaks at 2.2 GB for the 3:00 clip, 3.3 GB for 10:00 and 3.4 GB for 27:26 (Metal: 1.4 GB for 27:26). The Linux binaries use the CPU backend; Vulkan and CUDA need a build from source.
+| Platform | Support | Prebuilt binary | Measured engine time |
+|---|---|---|---|
+| macOS, Apple Silicon | Supported | `aarch64-apple-darwin` (Metal) | not in the Linux tier runs |
+| Linux arm64 | Supported | `aarch64-unknown-linux-gnu`, portable and `-dotprod` | 180 s clip: portable 11.256 s, dotprod 7.063 s |
+| Linux x86_64 | Supported | `x86_64-unknown-linux-gnu`, portable and `-avx2` | 300 s clip: portable 266.03 s, avx2 48.89 s |
+| Windows x86_64 | Best effort | `x86_64-pc-windows-msvc` | not measured |
+| macOS Intel | Best effort | none; build from source | not measured |
+
+The arm64 medians are from a Linux container on an Apple Silicon host (OrbStack, 6 CPUs), one run at a time. The x86_64 medians are from an ubuntu-22.04 runner, one run at a time. Vulkan and CUDA are best effort. Build them from source.
+
+On an Apple M4 Pro with Metal, peak RSS was 1.201 GB for 27:26 of audio, 1.262 GB for 54:53, and 1.279 GB for 109:46, after decoded audio moved to disk. RSS includes the engine and the transcript. These runs do not set a fixed memory limit. No Linux or Windows RSS figure is recorded. The measured Mac peaks are below 8 GB. A single pass over 38 minutes is estimated at 13-26 GB for one attention matrix, so scribe keeps 30 s chunks. Decoded audio uses about 230 MB of disk per hour, in addition to the 740 MB model file.
 
 ## Use
 
