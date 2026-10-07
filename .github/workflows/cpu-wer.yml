@@ -1,0 +1,161 @@
+# Manual x86_64 WER check for issue #12: the avx2 tier against the no-SIMD portable build.
+# Each tier is built in the release container and transcribes a LibriSpeech test-clean subset on its
+# own runner. A final job scores both against the LibriSpeech references with scripts/wer-compare.py.
+#
+# Subset: one chapter per speaker (each speaker's lowest chapter ID): 40 chapters, 1388 utterances,
+# 3.05 h of speech. The utterances of a chapter are joined in transcript order, with 0.5 s of silence
+# after each, into one WAV (3.25 h in total), so model load does not dominate. The reference is the
+# chapter's transcript lines in the same order. The portable build runs at about 0.89x real time on a
+# runner (266 s for 300 s, cpu-bench.yml), so it needs about 2.9 h; the avx2 tier needs about 0.5 h.
+# The full test-clean set (5.4 h) would need about 5.1 h with setup, too close to the 6 h job limit.
+name: CPU WER
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  MODEL_URL: https://huggingface.co/handy-computer/parakeet-ultra-gguf/resolve/39eeb55181f0d354fd934f06e92fd8d5037fed8e/parakeet-ultra-Q8_0.gguf
+  MODEL_SHA256: 007a59761e9258779f189df396b50d12b83bb5b79e66df4b955c230d2f2a0a59
+  # LibriSpeech (CC BY 4.0). MD5 as published in https://www.openslr.org/resources/12/md5sum.txt.
+  LIBRISPEECH_URL: https://www.openslr.org/resources/12/test-clean.tar.gz
+  LIBRISPEECH_MD5: 32fa31d27d2e1cad72775fee3f4849a9
+jobs:
+  transcribe:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 340
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - tier: portable
+            cmake: -DTRANSCRIBE_X86_CONSERVATIVE=ON
+            cpu_flags: ''
+          - tier: avx2
+            cmake: -DGGML_SSE42=ON -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_BMI2=ON -DGGML_AVX_VNNI=OFF -DGGML_AVX512=OFF
+            cpu_flags: avx2 fma f16c bmi2
+    env:
+      TIER: ${{ matrix.tier }}
+      TIER_CMAKE: ${{ matrix.cmake }}
+      CPU_FLAGS: ${{ matrix.cpu_flags }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the tier binary in manylinux_2_28
+        run: |
+          mkdir -p wer
+          docker run --rm --platform linux/amd64 -e TIER -e TIER_CMAKE \
+            -v "$PWD:/src" -w /src quay.io/pypa/manylinux_2_28_x86_64 bash -euo pipefail -c '
+              curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+              export PATH=/root/.cargo/bin:$PATH
+              # Same RUSTFLAGS and base CMake args as release.yml.
+              export RUSTFLAGS="-L native=$(dirname "$(g++ -print-file-name=libstdc++.a)") -l static=stdc++ -l static=gcc_eh -C link-arg=-static-libgcc"
+              args="-DGGML_NATIVE=OFF -DTRANSCRIBE_USE_SYSTEM_BLAS=OFF $TIER_CMAKE"
+              TRANSCRIBE_CMAKE_ARGS="$args" cargo build --release --locked
+              cp target/release/scribe "wer/scribe-$TIER"
+              echo "TRANSCRIBE_CMAKE_ARGS=$args" > "wer/cmake-$TIER.txt"
+              find target/release/build -path "*/build/CMakeCache.txt" -exec grep -hE \
+                "^(GGML_(NATIVE|SSE42|AVX|AVX2|AVX_VNNI|AVX512|FMA|F16C|BMI2)|TRANSCRIBE_(X86_CONSERVATIVE|USE_SYSTEM_BLAS)):" {} \; \
+                | sort >> "wer/cmake-$TIER.txt"
+              cat "wer/cmake-$TIER.txt"
+              chown -R "$(stat -c %u:%g /src)" wer target
+            '
+      - name: Check the runner CPU has the tier's features
+        run: |
+          lscpu | grep -E 'Model name|^CPU\(s\)' | tee "wer/cpu-$TIER.txt"
+          for f in $CPU_FLAGS; do
+            grep -q -w "$f" /proc/cpuinfo || { echo "::error::runner CPU lacks $f, required by the $TIER tier"; exit 1; }
+          done
+          sha256sum "wer/scribe-$TIER" | tee -a "wer/cpu-$TIER.txt"
+          "wer/scribe-$TIER" --version
+      - name: Download the model and LibriSpeech test-clean
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg jq > /dev/null
+          ffmpeg -version | sed -n 1p
+          curl -fsSL --retry 3 -o model.gguf "$MODEL_URL"
+          echo "$MODEL_SHA256  model.gguf" | sha256sum -c -
+          curl -fsSL --retry 3 -o test-clean.tar.gz "$LIBRISPEECH_URL"
+          echo "$LIBRISPEECH_MD5  test-clean.tar.gz" | md5sum -c -
+          tar xzf test-clean.tar.gz
+      - name: Join each selected chapter into one WAV and one reference
+        run: |
+          # 0.5 s of 16 kHz mono s16le silence after each utterance keeps words of adjacent utterances apart.
+          gap_bytes=16000
+          mkdir -p data/wav "wer/ref-$TIER"
+          # Directory names are numeric speaker and chapter IDs.
+          for spk in $(cd LibriSpeech/test-clean && printf '%s\n' * | sort -n); do
+            ch=$(cd "LibriSpeech/test-clean/$spk" && printf '%s\n' * | sort -n | head -n 1)
+            dir="LibriSpeech/test-clean/$spk/$ch"
+            id="$spk-$ch"
+            : > "data/$id.raw"
+            : > "wer/ref-$TIER/$id.txt"
+            # Each line: <utterance-id> <TEXT>. Audio and reference keep the same order.
+            while read -r utt text; do
+              ffmpeg -nostdin -hide_banner -loglevel error -i "$dir/$utt.flac" -f s16le -ac 1 -ar 16000 - >> "data/$id.raw"
+              head -c "$gap_bytes" /dev/zero >> "data/$id.raw"
+              printf '%s\n' "$text" >> "wer/ref-$TIER/$id.txt"
+            done < "$dir/$id.trans.txt"
+            ffmpeg -nostdin -y -hide_banner -loglevel error -f s16le -ar 16000 -ac 1 -i "data/$id.raw" -c:a pcm_s16le "data/wav/$id.wav"
+            rm "data/$id.raw"
+            printf '%s utterances=%s seconds=%s\n' "$id" "$(wc -l < "wer/ref-$TIER/$id.txt")" \
+              "$(ffprobe -v error -show_entries format=duration -of csv=p=0 "data/wav/$id.wav")"
+          done
+          echo "chapters=$(find data/wav -name '*.wav' | wc -l) utterances=$(cat wer/ref-"$TIER"/*.txt | wc -l)"
+      - name: Transcribe each chapter
+        run: |
+          mkdir -p "wer/hyp-$TIER" "wer/log-$TIER"
+          runs="wer/runs-$TIER.md"
+          printf '| Chapter | Load 1/5/15 min before run | Audio s | Engine s | Words |\n| --- | --- | ---: | ---: | ---: |\n' > "$runs"
+          for wav in data/wav/*.wav; do
+            id=$(basename "$wav" .wav)
+            load=$(cut -d' ' -f1-3 /proc/loadavg)
+            "wer/scribe-$TIER" "$wav" -m model.gguf --backend cpu --timings -o "out/$id" \
+              > "wer/log-$TIER/$id.stdout" 2> "wer/log-$TIER/$id.stderr"
+            jq -j '.text + " "' out/"$id"/*/segments.jsonl > "wer/hyp-$TIER/$id.txt"
+            printf '| %s | %s | %s | %s | %s |\n' "$id" "$load" \
+              "$(sed -n 's/^duration_secs: //p' out/"$id"/*/index.md)" \
+              "$(sed -n 's/^engine_secs: //p' out/"$id"/*/index.md)" \
+              "$(sed -n 's/^words: //p' out/"$id"/*/index.md)" | tee -a "$runs"
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: wer-${{ matrix.tier }}
+          path: wer/
+          if-no-files-found: error
+
+  score:
+    needs: transcribe
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wer-*
+          merge-multiple: true
+          path: wer
+      - name: Score avx2 against portable
+        run: |
+          # Both jobs build the references the same way; they must be identical.
+          diff -r wer/ref-portable wer/ref-avx2
+          python3 scripts/wer-compare.py wer/ref-portable portable=wer/hyp-portable avx2=wer/hyp-avx2 | tee wer/results.md
+          grep -q '^VERDICT: avx2 ' wer/results.md
+          {
+            echo '## CPU WER: avx2 vs portable, LibriSpeech test-clean subset'
+            echo
+            cat wer/results.md
+            for t in portable avx2; do
+              echo; echo "### $t runs"; echo; cat "wer/runs-$t.md"
+              echo; echo '```'; cat "wer/cpu-$t.txt" "wer/cmake-$t.txt"; echo '```'
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cpu-wer
+          path: |
+            wer/results.md
+            wer/runs-*.md
+            wer/cpu-*.txt
+            wer/cmake-*.txt
+            wer/ref-portable/
+            wer/hyp-*/
