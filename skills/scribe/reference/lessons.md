@@ -9,7 +9,7 @@ Write `lessons.draft.md` in the source folder. Leave `lessons.md` unchanged. The
 ## Read
 
 1. Read `index.md`: frontmatter, Sources, Chapters, the Parts table, Known terms, and Low-confidence passages.
-2. Read the topics index from your brief when it exists. Reuse an existing topic slug when it fits the subject. Add a new slug only when none fits.
+2. Read the topics index from your brief when it exists. It lists each slug as a list item, under the topic notes and under `## Single-source`. Before you add a slug, compare it with every listed slug, not only slugs that share a word. The words may differ, for example `llm-evals` and `model-evaluation`. Reuse the listed slug when it names the same subject. A narrower subject gets its own slug. Add a new slug only when none fits.
 3. Read every part in order. Use the file names in the Parts table. A source with no chapters uses `parts/NN.md`. A chapter part uses `parts/NN-<chapter>.md`. A chapter split into several parts adds a piece number, for example `parts/02-long-chapter-1.md`.
 
 The transcript has no speaker labels. Name speakers from Sources, the title, self-introductions, and cues such as "as Armin said". You may name the person behind a public handle from your own knowledge. Add `(inferred)` in `speakers`, and in `who` when the attribution is a guess. Write `speaker` when there is no cue.
