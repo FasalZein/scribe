@@ -5,9 +5,9 @@ metadata:
   version: "0.2.1"
 allowed-tools:
   - Bash(sh *scripts/install.sh)
-  - Bash(*sh *scripts/install.sh)
+  - Bash(PATH=* sh *scripts/install.sh)
   - Bash(powershell -ExecutionPolicy Bypass -File *scripts\install.ps1)
-  - Bash(powershell -ExecutionPolicy Bypass -Command *install.ps1*)
+  - Bash(powershell -ExecutionPolicy Bypass -Command *\scripts\install.ps1'")
   - Bash(scribe *)
   - Bash(*/scribe *)
   - Bash(uvx yt-dlp@latest *)
@@ -45,17 +45,19 @@ topics/INDEX.md                           topic notes, then single-source slugs
 
 On every run that calls scribe, run `sh <this skill's directory>/scripts/install.sh`. On Windows, run `powershell -ExecutionPolicy Bypass -File <this skill's directory>\scripts\install.ps1`.
 
-The script installs or updates scribe and checks ffmpeg, ffprobe, and uvx or yt-dlp. It also runs `doctor` on the binary it checked. `doctor` reports the backend, devices, memory, tool versions, the model cache, and a short self-test. When the script prints a PATH export, run that export and the script in one command. Use the install directory the script printed. A later command does not keep the export. On macOS and Linux, with the default install directory:
+The script installs or updates scribe and checks ffmpeg, ffprobe, and uvx or yt-dlp. It also runs `doctor` on the binary it checked. `doctor` reports the backend, devices, memory, tool versions, the model cache, and a short self-test. When the script prints a PATH export, run that assignment and the script as one command with no `;`. Use the install directory the script printed. A later command does not keep the assignment. On macOS and Linux:
 
 ```bash
-export PATH="$HOME/.local/bin:$PATH"; sh <this skill's directory>/scripts/install.sh
+PATH="<install-dir>:$PATH" sh <this skill's directory>/scripts/install.sh
 ```
 
-On Windows, one PowerShell command sets `$env:PATH` and then runs the script. Replace `<install-dir>` and `<skill-dir>`:
+On Windows, from the Bash tool, the backslashes keep Bash from expanding `$env`:
 
-```powershell
-powershell -ExecutionPolicy Bypass -Command "$env:PATH = '<install-dir>;' + $env:PATH; & '<skill-dir>\scripts\install.ps1'"
+```bash
+powershell -ExecutionPolicy Bypass -Command "\$env:PATH = '<install-dir>;' + \$env:PATH; & '<skill-dir>\scripts\install.ps1'"
 ```
+
+From a PowerShell shell, write `` `$env:PATH `` in place of `\$env:PATH`.
 
 When the script prints a package install command, run that command only with the user's approval, then run the script again. Build prerequisites are in the [README](https://github.com/FasalZein/scribe#build-from-source).
 
@@ -90,7 +92,7 @@ For each source that succeeds or is skipped, stdout prints one absolute `index.m
 - **Skip**: an existing `index.md` is skipped and still printed. scribe finds the folder by source ID, not by title or date. The skip check follows the metadata fetch, so a network error such as HTTP 403 can fail a source that is already transcribed. Run that source again later.
 - **HTTP 403**: run scribe once more on that YouTube source. A second 403 is a failure.
 - **Model load**: when stderr contains `model load failed`, the run stopped. Later sources were not attempted. Report the error and stop.
-- **`--force`** redoes a transcript and keeps the existing `lessons.md`. Part boundaries can move. Re-extract that source in step 5.
+- **`--force`** redoes a transcript and keeps the existing `lessons.md`. Before you run `--force` on a source, remove its `lessons.draft.md`. Part boundaries can move. Re-extract that source in step 5.
 - **`--language <code>`** passes a language hint. The default model covers English and other European languages. Lessons stay in English.
 
 A long batch can outlast a shell timeout. Measured examples for 30 minutes of audio are about 15-20 s of engine time on an idle Apple Silicon Mac, and about 2.5 minutes on 6 CPU cores. A busy host can take several times longer. The first run also downloads the model (about 740 MB). Run scribe in the background and poll, or transcribe in smaller groups. A rerun skips finished sources.
@@ -104,15 +106,13 @@ Done when every source has an `index.md` path, a reported failure, or a not-atte
 For each index, read frontmatter `title`, `parts`, and `words`. Give the source the first mark that fits:
 
 1. **no speech**: `parts: 0`. Do not extract it. When `lessons.md` exists, run `<scribe> lessons check` on it. When that check exits 0, or when `lessons.md` is absent, name the source in the report. When the check fails, name the source and the `scribe:` error. Before step 6, ask the user whether to move `lessons.md` aside, for example to `lessons.stale.md`, and to remove topic-note bullets that link to it. Until that file is moved aside, `topics plan` and `topics index` fail for the whole library.
-2. **extract**: `lessons.draft.md` exists, or the user asked to redo the source, or this run used `--force`.
+2. **extract**: `lessons.draft.md` exists, or the user asked to redo the source, or this run used `--force`. When the user asks to redo a source, remove its `lessons.draft.md` once, before step 5. Leave a draft that step 5 has already written.
 3. **extract**: `lessons.md` is absent, or `<scribe> lessons check <lessons.md>` exits non-zero.
 4. **already extracted**: `lessons check` exits 0.
 
 Done when each source has one mark.
 
 ### 5. Extract lessons
-
-When this run used `--force`, or the user asked to redo the source, remove `lessons.draft.md` before extraction. That draft cites the previous parts.
 
 One source: extract it inline. Follow [`reference/lessons.md`](reference/lessons.md).
 
@@ -148,17 +148,17 @@ Done when every source marked **extract** has a `lessons.md` that passes `lesson
 
 Follow [`reference/topics.md`](reference/topics.md).
 
-When a source has `parts: 0` and its `lessons.md` still fails `lessons check`, wait for the user's answer before this step. Move that file aside only when the user agrees, and remove topic-note bullets that link to it. When the user does not agree, stop. `topics plan` fails while that file remains.
+When a source has `parts: 0` and its `lessons.md` still fails `lessons check`, wait for the user's answer before the commands below. Move that file aside only when the user agrees, and remove topic-note bullets that link to it. When the user does not agree, skip the commands below and report in step 7 that topic notes were not updated, naming the blocking file.
 
 Run `<scribe> topics plan`. Start one helper per topic note to create or update, at most 6 at a time. When you cannot start helpers, merge the notes yourself, one at a time.
 
 You publish `topics/INDEX.md` by running `<scribe> topics index`. That command is the only writer of the index.
 
-Done when every topic slug on the new lessons is a topic note or a single-source line, every helper reply accounts for every tagged lesson, `topics index` exits 0, and the new index has no `## Pending notes` entry for those slugs.
+Done when every topic slug on the new lessons is a topic note or a single-source line, every helper reply accounts for every tagged lesson, `topics index` exits 0, and the new index has no `## Pending notes` entry for those slugs. When the user left the blocking file in place, this step is done by skipping it.
 
 ### 7. Report
 
-Per source, give the title, the lesson count, and the focus answer when a focus was set. Then list the topic notes you created or updated, with paths. Name each failed source and its error, each source not attempted, and each source with no speech.
+Per source, give the title, the lesson count, and the focus answer when a focus was set. Then list the topic notes you created or updated, with paths. When step 6 was skipped, say that topic notes were not updated and name the blocking `lessons.md`. Name each failed source and its error, each source not attempted, and each source with no speech.
 
 ## Answer from the library
 
