@@ -52,7 +52,7 @@ Reply with one line: <topic-slug> | <one-line scope> | <source count> | <lessons
 
 When you cannot start helpers, merge the notes yourself, one at a time.
 
-Check each reply against the plan: `lessons cited` plus `lessons excluded` equals the number of lessons tagged with the slug. Run that helper once more when it does not.
+Check each note against the plan: every listed lesson link must appear under Lessons or Excluded lessons with a reason. For an inline merge, read the written note and check off each plan link. With helpers, also check each reply: `lessons cited` plus `lessons excluded` equals the number of lessons tagged with the slug. Run that helper once more when either check fails.
 
 ## Topic note rules
 
@@ -89,6 +89,7 @@ updated_at: <RFC 3339 time>
 - [L7](../sources/<source-folder>/lessons.md#l7): <reason, for example covered by topics/idempotency.md, or off this subject>
 ```
 
+- When no lessons are excluded, write `None.` under Excluded lessons.
 - Group lessons that say the same thing under one heading. When sources agree, list each one under that heading.
 - Call two claims a conflict only when they address the same scope under incompatible conditions. Otherwise describe the difference. Keep each lesson's conditions and exceptions.
 - Keep each speaker's attribution and each `verify:` note. An opinion from one speaker stays an opinion.
@@ -111,4 +112,4 @@ The index is complete when the command exits 0 and no affected slug remains unde
 
 ## Done
 
-Every topic slug on the new lessons is a topic note or a Single-source line. Every helper reply accounts for its tagged lessons. `topics/INDEX.md` lists every file in `topics/`. No slug is in both lists.
+Every topic slug on the new lessons is a topic note or a Single-source line. Every merged note accounts for its tagged lessons, checked against the plan. `topics/INDEX.md` lists every file in `topics/`. No slug is in both lists.

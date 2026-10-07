@@ -154,7 +154,7 @@ Run `<scribe> topics plan`. Start one helper per topic note to create or update,
 
 You publish `topics/INDEX.md` by running `<scribe> topics index`. That command is the only writer of the index.
 
-Done when every topic slug on the new lessons is a topic note or a single-source line, every helper reply accounts for every tagged lesson, `topics index` exits 0, and the new index has no `## Pending notes` entry for those slugs. When the user left the blocking file in place, this step is done by skipping it.
+Done when every topic slug on the new lessons is a topic note or a single-source line, every merged note accounts for every tagged lesson as described in the reference, `topics index` exits 0, and the new index has no `## Pending notes` entry for those slugs. When the user left the blocking file in place, this step is done by skipping it.
 
 ### 7. Report
 
